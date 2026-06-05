@@ -17,25 +17,6 @@
 
   <!-- Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
-
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script>
-    const _FB_CONFIG = {
-      apiKey: "AIzaSyB5v3L2J2cUjSw95ww3B7pdj2ZMvhbYZWU",
-      authDomain: "dz-34acf.firebaseapp.com",
-      databaseURL: "https://connectdz-49fab-default-rtdb.firebaseio.com",
-      projectId: "dz-34acf",
-      storageBucket: "dz-34acf.firebasestorage.app",
-      messagingSenderId: "5440055586321",
-      appId: "1:544005586321:web:b3d5367402e9cdb8ac2e30",
-      measurementId: "G-4FFLXH5Z8M"
-    };
-    if (!firebase.apps.length) firebase.initializeApp(_FB_CONFIG);
-    const _fbDB = firebase.database();
-  </script>
 </head>
 
 <!-- ============================================================
@@ -6542,6 +6523,7 @@
 // ════════════════════════════════════════════════════════════
 // CONFIG
 // ════════════════════════════════════════════════════════════
+const GSHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
 // CURRENT_USER يقرأ دائماً من localStorage حتى يعكس اسم المستخدم الحقيقي بعد تسجيل الدخول
 function getCurrentUser() { return localStorage.getItem('cdz_user_display') || window._cdz_current_user_name || ''; }
 // للتوافق مع الكود القديم الذي يستخدم CURRENT_USER مباشرة
@@ -6561,28 +6543,52 @@ let bankBalance = 0;        // الرصيد
 let bankTransactions = JSON.parse(localStorage.getItem('cdz_bank_txns') || '[]');
 
 // ════════════════════════════════════════════════════════════
-// FIREBASE — جلب نقاط المستخدم
+// GOOGLE SHEET — جلب نقاط عمود AC
 // ════════════════════════════════════════════════════════════
 async function fetchSheetPoints() {
   try {
-    const curUser = getCurrentUser();
-    if (!curUser) { updateAllPointsDisplays(); return; }
-    const snap = await _fbDB.ref('members').orderByChild('name').equalTo(curUser).once('value');
-    if (snap.exists()) {
-      const data = snap.val();
-      const key = Object.keys(data)[0];
-      const pts = data[key].points || data[key].pts || 0;
-      userSheetPts = pts;
-      updateAllPointsDisplays();
-      return;
+    const res = await fetch(GSHEET_URL);
+    const text = await res.text();
+    const rows = text.trim().split('\n');
+    if (rows.length < 2) return;
+
+    // السطر الأول هو الرؤوس — ابحث عن عمود AC (الفهرس 28)
+    const headers = parseCSVRow(rows[0]);
+    // عمود AC = الحرف 29 = الفهرس 28
+    // حاول إيجاد عمود "النقاط" أو الفهرس 28
+    let ptsColIdx = 28; // AC افتراضي
+    headers.forEach((h, i) => {
+      const clean = h.replace(/"/g,'').trim().toLowerCase();
+      if (clean.includes('point') || clean.includes('نقطة') || clean.includes('نقاط') || clean === 'ac') {
+        ptsColIdx = i;
+      }
+    });
+
+    // ابحث عن صف المستخدم الحالي
+    for (let i = 1; i < rows.length; i++) {
+      const cols = parseCSVRow(rows[i]);
+      const name = (cols[1] || cols[0] || '').replace(/"/g,'').trim();
+      if (name === CURRENT_USER || (CURRENT_USER && name === CURRENT_USER)) {
+        const pts = parseFloat((cols[ptsColIdx] || '0').replace(/"/g,'')) || 0;
+        userSheetPts = pts;
+        updateAllPointsDisplays();
+        return;
+      }
     }
-    // fallback: MEMBERS_CSV_DATA
-    const me = window.MEMBERS_CSV_DATA && window.MEMBERS_CSV_DATA.find(m => m.name === curUser);
-    if (me) { userSheetPts = me.pts || 0; }
+
+    // fallback: أعلى نقطة
+    let maxPts = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const cols = parseCSVRow(rows[i]);
+      const pts = parseFloat((cols[ptsColIdx] || '0').replace(/"/g,'')) || 0;
+      if (pts > maxPts) maxPts = pts;
+    }
+    userSheetPts = maxPts;
     updateAllPointsDisplays();
   } catch(e) {
+    // fallback من MEMBERS_CSV_DATA
     try {
-      const me = window.MEMBERS_CSV_DATA && window.MEMBERS_CSV_DATA.find(m => m.name === getCurrentUser());
+      const me = window.MEMBERS_CSV_DATA && window.MEMBERS_CSV_DATA.find(m => m.name === CURRENT_USER);
       if (me) userSheetPts = me.pts || 0;
     } catch(e2) {}
     updateAllPointsDisplays();
@@ -9293,21 +9299,8 @@ if (document.readyState === 'loading') {
   function renderFriendSuggestions() {
     const grid = document.getElementById('friends-suggestions-grid');
     if (!grid || grid.dataset.loaded) return;
-    // إذا لم تُحمَّل البيانات بعد، انتظر
-    if (!_membersLoaded || !allMembers.length) {
-      grid.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted);font-family:var(--font-main);font-size:.85rem;"><i class="fa-solid fa-spinner fa-spin" style="font-size:1.5rem;display:block;margin-bottom:10px"></i>جارٍ تحميل الأعضاء...</div>';
-      // أعد المحاولة بعد ثانية
-      setTimeout(() => { delete grid.dataset.loaded; renderFriendSuggestions(); }, 1500);
-      return;
-    }
     grid.dataset.loaded = '1';
-    const curUser = localStorage.getItem('cdz_user_display') || '';
-    // أزل المستخدم الحالي من الاقتراحات
-    const members = allMembers.filter(m => m.name && m.name !== curUser);
-    if (!members.length) {
-      grid.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted);font-family:var(--font-main);font-size:.85rem;">لا توجد اقتراحات حالياً</div>';
-      return;
-    }
+    const members = (typeof allMembers !== 'undefined' && allMembers.length) ? allMembers : MEMBERS_CSV_DATA;
     grid.innerHTML = members.map((m, i) => {
       const photo = m.photo || m.photo_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(m.name)}`;
       const pts = (m.pts || 0).toLocaleString('ar-DZ');
@@ -9446,7 +9439,7 @@ if (document.readyState === 'loading') {
     'القسم الثالث','القسم الثاني','القسم الأول','المحترف'
   ];
 
-  // بيانات المبتدئ الحقيقية — تُحمَّل من Firebase
+  // بيانات المبتدئ الحقيقية — تُحمَّل من Google Sheet
   let beginnersDivisionData = null;
 
   async function loadBeginnersDivision() {
@@ -9454,38 +9447,29 @@ if (document.readyState === 'loading') {
     if (!body) return;
     body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-family:var(--font-main)"><i class="fa-solid fa-spinner fa-spin"></i> جارٍ التحميل...</div>';
 
-    // إذا لم تُحمَّل بيانات الشيت بعد، انتظر ثم أعد المحاولة
-    if (!_membersLoaded) {
-      await loadMembersFromSheet();
-    }
-
     try {
-      // جرّب Firebase أولًا
-      const snap = await _fbDB.ref('members').orderByChild('points').once('value');
-      if (snap.exists()) {
-        const data = snap.val();
-        const fbData = Object.values(data).map(d => ({
-          name: d.name || '',
-          pts: d.points || d.pts || 0,
-          photo: d.photo_url || d.photo || null
-        })).filter(d => d.name && d.name.trim().length > 1)
-           .sort((a,b) => b.pts - a.pts);
-        if (fbData.length > 0) {
-          beginnersDivisionData = fbData;
+      // جرّب Supabase أولًا
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/members?select=name,points,photo_url&order=points.desc`, {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          beginnersDivisionData = data.map(d => ({
+            name: d.name || '',
+            pts: d.points || 0,
+            photo: d.photo_url || null
+          }));
           renderBeginnerDivision();
           return;
         }
       }
     } catch(e) {}
 
-    // fallback: بيانات الشيت مرتبة حسب النقاط
-    if (allMembers.length > 0) {
-      beginnersDivisionData = [...allMembers]
-        .sort((a, b) => (b.pts || 0) - (a.pts || 0))
-        .map(d => ({ name: d.name, pts: d.pts || 0, photo: d.photo || null }));
-    } else {
-      beginnersDivisionData = [];
-    }
+    // fallback: بيانات CSV المحلية مرتبة حسب النقاط
+    beginnersDivisionData = [...MEMBERS_CSV_DATA]
+      .sort((a, b) => (b.pts || 0) - (a.pts || 0))
+      .map(d => ({ name: d.name, pts: d.pts || 0, photo: d.photo || null }));
     renderBeginnerDivision();
   }
 
@@ -9549,42 +9533,85 @@ if (document.readyState === 'loading') {
     btn.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'center' });
   }
 
-  // ═══ الأقسام الأخرى (الهاوي → الأول) — فارغة حتى يصعد لاعبون حقيقيون ═══
+  // Generate fake players for other divisions
+  const PLAYER_NAMES_OTHER = [
+    ['فارس زيان','ملاك بوشي','رضا أمزيان','نجوى سليماني','حسام قروم','إيمان عزيز','سمير حمدوش','أسماء بلعيد','وليد تلمساني','منى بوعزة'],
+    ['توفيق موساوي','مروة بن حمو','ياسمين سعود','زياد رحاب','لامية خليل','عادل براهيمي','حنان بلحاج','منذر غالم','خولة بوطالب','بكر صالح'],
+    ['حمزة مزغيش','فريال عروس','عمار شعيب','زينب بكار','وسيم نكاع','فايزة بن علي','لزهر قائد','ليلى درياسة','ماجد حمداني','سناء بلقاسم'],
+  ];
+  const AVATARS = [11,22,33,44,55,31,43,50,60,65,15,25,37,12,20,48];
+
   function genDivisionPlayers(divIdx) {
-    // لا لاعبين وهميين — الأقسام تبقى فارغة حتى يصعد لاعبون حقيقيون من المبتدئ
-    return [];
+    const pool = PLAYER_NAMES_OTHER[Math.min(divIdx - 1, PLAYER_NAMES_OTHER.length - 1)];
+    const names = [...pool].slice(0, 10);
+    const basePoints = Math.max(200, 12000 - divIdx * 900);
+    return names.map((n,i) => ({
+      name: n, isMe: false,
+      avatar: AVATARS[i % AVATARS.length],
+      pts: basePoints - i * Math.floor(basePoints * .05) + Math.floor(Math.random()*80),
+      trend: i < 5 ? 'up' : i < 8 ? 'stable' : 'down'
+    })).sort((a,b) => b.pts - a.pts).map((p,i) => ({...p, rank: i+1}));
   }
 
   function renderDivision(idx) {
+    const players = genDivisionPlayers(idx);
+    const isBeginners = idx === 0;
+    const promoCount = isBeginners ? 10 : 5;
+    const relgCount  = isBeginners ? 0  : 5;
+    const total      = players.length;
+
     const body = $('#tourn-table-body');
     if (!body) return;
     body.innerHTML = '';
 
+    players.forEach((p, i) => {
+      const isPromo = i < promoCount;
+      const isRelg  = !isBeginners && i >= (total - relgCount);
+      const row = document.createElement('div');
+      row.className = 'tourn-row' + (p.isMe ? ' is-me' : '') + (isPromo ? ' promo-zone' : '') + (isRelg ? ' relg-zone' : '');
+
+      let rankClass = '';
+      if (p.rank === 1) rankClass = 'gold';
+      else if (p.rank === 2) rankClass = 'silver';
+      else if (p.rank === 3) rankClass = 'bronze';
+
+      let trendIcon = '';
+      if (p.trend === 'up')     trendIcon = '<i class="fa-solid fa-arrow-up"></i>';
+      else if (p.trend === 'down') trendIcon = '<i class="fa-solid fa-arrow-down"></i>';
+      else                     trendIcon = '<i class="fa-solid fa-minus"></i>';
+
+      row.innerHTML = `
+        <span class="tourn-rank ${rankClass}">${p.rank === 1 ? '🥇' : p.rank === 2 ? '🥈' : p.rank === 3 ? '🥉' : p.rank}</span>
+        <div class="tourn-player">
+          <img src="https://i.pravatar.cc/80?img=${p.avatar}" alt="${p.name}" />
+          <div>
+            <div class="tourn-player-name">${p.name}${p.isMe ? ' 👤' : ''}</div>
+            <div class="tourn-player-div">${DIVISION_NAMES[idx]}</div>
+          </div>
+        </div>
+        <div class="tourn-pts">${p.pts.toLocaleString('ar-DZ')}</div>
+        <div class="tourn-trend ${p.trend}">${trendIcon}</div>
+      `;
+      body.appendChild(row);
+    });
+
+    // Rules
     const rules = $('#tourn-rules-body');
-    const isBeginners = idx === 0;
-    const divName = DIVISION_NAMES[idx] || '';
-    const nextDiv = idx < 12 ? DIVISION_NAMES[idx + 1] : '—';
-    const prevDiv = idx > 0  ? DIVISION_NAMES[idx - 1] : '—';
-
-    // رسالة فارغة — لا لاعبين وهميين
-    body.innerHTML = `
-      <div style="text-align:center;padding:40px 20px;color:var(--text-muted);font-family:var(--font-main);">
-        <i class="fa-solid fa-trophy" style="font-size:2.5rem;display:block;margin-bottom:12px;color:var(--border)"></i>
-        <div style="font-size:.92rem;font-weight:800;color:var(--text-main);margin-bottom:6px">${divName}</div>
-        <div style="font-size:.8rem;">لا يوجد لاعبون في هذا القسم بعد<br>يصعد الفائزون من القسم الأدنى كل خميس</div>
-      </div>`;
-
     if (rules) {
       if (isBeginners) {
         rules.innerHTML = `
           <strong>القسم المبتدئ</strong> — عدد غير محدود من اللاعبين<br>
-          🟢 الصعود: أفضل <strong>10</strong> لاعبين يصعدون إلى القسم الهاوي كل خميس 21:00`;
+          🟢 الصعود: أفضل <strong>10</strong> لاعبين يصعدون إلى القسم الهاوي كل خميس 21:00
+        `;
       } else {
+        const nextDiv = idx < 12 ? DIVISION_NAMES[idx+1] : '—';
+        const prevDiv = idx > 0 ? DIVISION_NAMES[idx-1] : '—';
         rules.innerHTML = `
-          <strong>${divName}</strong> — أقصى 10 لاعبين في كل قسم<br>
+          <strong>${DIVISION_NAMES[idx]}</strong> — أقصى 10 لاعبين في كل قسم<br>
           🟢 الصعود: أفضل <strong>5</strong> يصعدون إلى ${nextDiv}<br>
           🔴 النزول: أسوأ <strong>5</strong> ينزلون إلى ${prevDiv}<br>
-          ⚡ شرط الصعود: يجب أن يكون اللاعب الصاعد أكثر تنقيطاً من اللاعب النازل`;
+          ⚡ شرط الصعود: يجب أن يكون اللاعب الصاعد أكثر تنقيطاً من اللاعب النازل
+        `;
       }
     }
   }
@@ -9769,96 +9796,46 @@ if (document.readyState === 'loading') {
 
 
   // ════════════════════════════════════════════════════════════════
-  // JS: MEMBERS PAGE — بيانات من Firebase
+  // JS: MEMBERS PAGE — بيانات من CSV + Supabase
   // ════════════════════════════════════════════════════════════════
 
-  // ══════════════════════════════════════════════════════
-  // بيانات الأعضاء — تُجلب من Google Sheets (CSV)
-  // ══════════════════════════════════════════════════════
-  const MEMBERS_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
+  const SUPABASE_URL = 'https://wgzinbjwkmgobenyhsvz.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_QwzwrJR6QKN2eZ9CAnLFQQ_U7suNWeq';
 
-  // ─── مُحلّل CSV بسيط يتعامل مع علامات الاقتباس ───
-  function parseCSVLine(line) {
-    const result = [];
-    let cur = '', inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') { inQ = !inQ; }
-      else if (ch === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
-      else { cur += ch; }
-    }
-    result.push(cur.trim());
-    return result;
-  }
+  const MEMBERS_CSV_DATA = [
+    { name: 'عياد سلسبيل', dob: '2012-08-13', gender: 'أنثى', category: 'طفل',  rank: 'برعم مبتكر',           pts: 95,   photo: 'https://drive.google.com/thumbnail?id=1QCJthOwGBYWQbXcgSS99YyzJyG7Ydxcy' },
+    { name: 'حمودي محمد الأمين', dob: '2006-03-23', gender: 'ذكر', category: 'شاب', rank: 'قائد شاب',           pts: 120,  photo: 'https://drive.google.com/thumbnail?id=1o71gGbSjgnkWe3w6uIsn_dRChN_EU6Xz' },
+    { name: 'راجع ياسين', dob: '2014-01-19', gender: 'ذكر', category: 'طفل',  rank: 'قائد شاب',               pts: 70000,photo: 'https://drive.google.com/thumbnail?id=14-EIJkhgu-nLG_Y8TfSYWOyJx5okb6-_' },
+    { name: 'بوكلي اسمهان', dob: '1987-02-24', gender: 'أنثى', category: 'شاب', rank: 'رائد التنفيذ',          pts: 75,   photo: 'https://drive.google.com/thumbnail?id=1QNICWjxR-VtKOcmU7suNWeq' },
+    { name: 'بالغ شيماء', dob: '2001-03-07', gender: 'أنثى', category: 'شاب', rank: 'قائد حامل للشارة القيادية', pts: 70,  photo: 'https://drive.google.com/thumbnail?id=1cMXgb4BrusRZmxO-uz3sC0Ny-f4mfLSG' },
+    { name: 'يحي ديش', dob: '1991-08-06', gender: 'ذكر', category: 'شاب', rank: 'رائد',                       pts: 1783, photo: 'https://drive.google.com/thumbnail?id=11-oBHhYzHkmHeCsRsGfeeMeGmYx-GLyJ' },
+    { name: 'حمودي عبد الغاني', dob: '2010-04-06', gender: 'ذكر', category: 'طفل', rank: 'bud',               pts: 0,    photo: 'https://drive.google.com/thumbnail?id=15RS7v8rB6kUz88FcfBkFAT96Lhei4o8v' },
+    { name: 'اسراء سفيسيفي', dob: '2015-02-11', gender: 'أنثى', category: 'طفل', rank: 'قائد مبتدئ',          pts: 50,   photo: 'https://drive.google.com/thumbnail?id=17LlY9RowCyo0Dkt1lq2UPodvSpY4dlUm' },
+    { name: 'أنس سفيسيفي', dob: '2013-03-27', gender: 'ذكر', category: 'طفل', rank: 'قائد مبتدئ',             pts: 50,   photo: 'https://drive.google.com/thumbnail?id=1kPk7cg7uTgRbxT--YiHkVRhXbBzfCb2K' },
+    { name: 'Kemouche douaa chaimae', dob: '2012-05-24', gender: 'أنثى', category: 'شاب', rank: '',            pts: 0,    photo: 'https://drive.google.com/thumbnail?id=1UfCPOi1r9IFczifbU2Aea8iTv0ryoMyh' },
+    { name: 'منال كازي اول', dob: '2003-12-14', gender: 'أنثى', category: 'شاب', rank: '',                    pts: 0,    photo: 'https://drive.google.com/thumbnail?id=1Odg-J1lsOVZKxdBE41ro1CUazZ8mh5mL' },
+    { name: 'ابتسام عشعاشي', dob: '1993-03-12', gender: 'أنثى', category: 'شاب', rank: '',                    pts: 0,    photo: null },
+    { name: 'عبد المنعم زكراوي', dob: '2007-11-05', gender: 'ذكر', category: 'شاب', rank: '',                  pts: 75,   photo: null },
+    { name: 'بشرى بن موسى', dob: '2001-12-12', gender: 'أنثى', category: 'شاب', rank: '',                     pts: 111,  photo: null },
+    { name: 'بن قدور ايمان', dob: '1987-12-30', gender: 'أنثى', category: 'شاب', rank: '',                    pts: 201,  photo: 'https://drive.google.com/thumbnail?id=1tFgyJwHf0m2iSNtRaE9aBd0eSjAmbv53' },
+    { name: 'شيماء طبال', dob: '2005-03-19', gender: 'أنثى', category: 'شاب', rank: '',                       pts: 180,  photo: null },
+    { name: 'سمير العيسوف', dob: '2001-07-13', gender: 'ذكر', category: 'شاب', rank: '',                      pts: 90,   photo: null },
+    { name: 'ايمان جلطي', dob: '2009-01-27', gender: 'أنثى', category: 'طفل', rank: '',                       pts: 85,   photo: null },
+    { name: 'Hamoudi Abdelemouman13', dob: '2007-09-11', gender: 'ذكر', category: 'شاب', rank: '',             pts: 103,  photo: null },
+    { name: 'جيلالي مبروك', dob: '1982-03-17', gender: 'ذكر', category: 'شاب', rank: '',                      pts: 120,  photo: null },
+    { name: 'هدايات لوزاني', dob: '2011-09-14', gender: 'ذكر', category: 'طفل', rank: '',                     pts: 75,   photo: null },
+    { name: 'تاج الدين بن منصور', dob: null, gender: 'ذكر', category: 'شاب', rank: '',                         pts: 105,  photo: null },
+    { name: 'حمودي فتح الله', dob: null, gender: 'ذكر', category: 'طفل', rank: '',                             pts: 95,   photo: null },
+    { name: 'سفيسيفي شيماء', dob: null, gender: 'أنثى', category: 'شاب', rank: '',                            pts: 130,  photo: null },
+    { name: 'اناس مصمودي', dob: null, gender: 'ذكر', category: 'شاب', rank: '',                                pts: 0,    photo: null },
+    { name: 'حمزة طرشاوي', dob: null, gender: 'ذكر', category: 'شاب', rank: '',                                pts: 75,   photo: null },
+    { name: 'لميس شحاب', dob: null, gender: 'أنثى', category: 'شاب', rank: '',                                 pts: 65,   photo: null },
+    { name: 'احمد الياس عياد', dob: null, gender: 'ذكر', category: 'طفل', rank: '',                            pts: 100,  photo: null },
+    { name: 'تواتي سميرة', dob: null, gender: 'أنثى', category: 'شاب', rank: '',                               pts: 50,   photo: null },
+  ];
 
-  function parseSheetCSV(csvText) {
-    const lines = csvText.trim().split('\n').filter(l => l.trim());
-    if (lines.length < 2) return [];
-    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g,'_'));
-    // نبحث عن العمود المناسب لكل حقل
-    const findCol = (...keys) => keys.map(k => headers.indexOf(k)).find(i => i !== -1) ?? -1;
-    const nameIdx   = findCol('name','الاسم','الاسم_الكامل','full_name');
-    const dobIdx    = findCol('dob','تاريخ_الميلاد','date_of_birth','birthday');
-    const genderIdx = findCol('gender','الجنس','sex');
-    const catIdx    = findCol('category','الفئة','categorie','فئة');
-    const rankIdx   = findCol('rank','الرتبة','grade','رتبة');
-    const ptsIdx    = findCol('pts','points','نقاط','score','النقاط');
-    const photoIdx  = findCol('photo','photo_url','صورة','الصورة','image');
-
-    const members = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cols = parseCSVLine(lines[i]);
-      const name = nameIdx >= 0 ? (cols[nameIdx] || '').trim() : '';
-      if (!name || name.length < 2) continue; // تجاهل الصفوف الفارغة
-      members.push({
-        name,
-        dob:      dobIdx    >= 0 ? (cols[dobIdx]    || null) : null,
-        gender:   genderIdx >= 0 ? (cols[genderIdx] || '')   : '',
-        category: catIdx    >= 0 ? (cols[catIdx]    || '')   : '',
-        rank:     rankIdx   >= 0 ? (cols[rankIdx]   || '')   : '',
-        pts:      ptsIdx    >= 0 ? (parseInt(cols[ptsIdx]) || 0) : 0,
-        photo:    photoIdx  >= 0 ? (cols[photoIdx]  || null) : null,
-      });
-    }
-    return members;
-  }
-
-  // قائمة الأعضاء — تبدأ فارغة وتُملأ من الشيت
-  let MEMBERS_CSV_DATA = [];
-  let allMembers = [];
-  let filteredMembers = [];
-  let _membersLoaded = false;
-
-  async function loadMembersFromSheet() {
-    try {
-      const res = await fetch(MEMBERS_SHEET_CSV_URL + '&t=' + Date.now());
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const csv = await res.text();
-      const parsed = parseSheetCSV(csv);
-      if (parsed.length > 0) {
-        MEMBERS_CSV_DATA = parsed;
-        allMembers = [...parsed];
-        filteredMembers = [...parsed];
-        _membersLoaded = true;
-        // تحديث قائمة الأعضاء في الواجهة إن كانت مفتوحة
-        if (typeof renderMembersList === 'function') renderMembersList(allMembers);
-        // تحديث اقتراحات الأصدقاء
-        const suggGrid = document.getElementById('friends-suggestions-grid');
-        if (suggGrid) { delete suggGrid.dataset.loaded; renderFriendSuggestions(); }
-        // تحديث البطولة إن كانت مفتوحة
-        if (typeof loadBeginnersDivision === 'function' && currentDiv === 0) loadBeginnersDivision();
-        console.log('[Sheet] تم تحميل', parsed.length, 'عضو من Google Sheets');
-      }
-    } catch(e) {
-      console.warn('[Sheet] فشل جلب الأعضاء من Sheets:', e.message);
-    }
-  }
-
-  // تحميل فوري عند بدء الصفحة
-  loadMembersFromSheet();
-
-  let allMembers_alias = allMembers; // alias للتوافق مع الكود القديم
-  let filteredMembers_alias = filteredMembers;
+  let allMembers = [...MEMBERS_CSV_DATA];
+  let filteredMembers = [...allMembers];
   let currentCategoryFilter = 'الكل';
 
   function calcAge(dob) {
@@ -9939,32 +9916,33 @@ if (document.readyState === 'loading') {
     filterMembers(document.getElementById('members-search-input')?.value || '');
   }
 
-  async function loadMembersFromFirebase() {
+  async function loadMembersFromSupabase() {
     try {
-      const snap = await _fbDB.ref('members').orderByChild('points').once('value');
-      if (snap.exists()) {
-        const data = snap.val();
-        const fbMembers = Object.values(data).map(d => ({
-          name: d.name || '',
-          dob: d.dob || null,
-          gender: d.gender || '',
-          category: d.category || 'شاب',
-          rank: d.rank || '',
-          pts: d.points || d.pts || 0,
-          photo: d.photo_url || d.photo || null
-        })).sort((a,b) => b.pts - a.pts);
-        if (fbMembers.length > 0) {
-          allMembers = fbMembers;
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/members?select=name,points,photo_url,category,rank,dob,gender&order=points.desc`, {
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          allMembers = data.map(d => ({
+            name: d.name || '',
+            dob: d.dob || null,
+            gender: d.gender || '',
+            category: d.category || 'شاب',
+            rank: d.rank || '',
+            pts: d.points || 0,
+            photo: d.photo_url || null
+          }));
           filteredMembers = [...allMembers];
         }
       }
-    } catch(e) { /* استخدم بيانات CSV الثابتة */ }
+    } catch(e) { /* استخدم بيانات CSV */ }
     document.getElementById('members-loading').style.display = 'none';
     renderMembersList(allMembers);
   }
 
   function initMembersPage() {
-    loadMembersFromFirebase();
+    loadMembersFromSupabase();
   }
 
 
@@ -10072,7 +10050,10 @@ if (document.readyState === 'loading') {
   let quizSessionScore = 0;
   let quizAttempts = {}; // questionIdx → number of attempts
   let quizAnswered = false;
-  let allSheetQuestions = []; // جميع الأسئلة من بنك الأسئلة
+  let allSheetQuestions = []; // جميع الأسئلة من Google Sheet مرتبة
+
+  // ─── Google Sheet للأسئلة — نفس رابط البيانات ───
+  const GSHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
 
   // ─── جلب الأسئلة من Google Sheet ───
   async function loadQuestionsFromSheet(lvlIdx) {
@@ -11865,17 +11846,28 @@ if (document.readyState === 'loading') {
   }
 
   /* ── VIEWS MODAL ── */
+  const FAKE_VIEWERS = [
+    {name:'أمين بوعلام', img:'11', time:'منذ دقيقتين'},
+    {name:'سارة حمدي', img:'22', time:'منذ 5 دقائق'},
+    {name:'كريم بلعباس', img:'33', time:'منذ 10 دقائق'},
+    {name:'نور الهدى', img:'44', time:'منذ 20 دقيقة'},
+    {name:'ياسين عمراوي', img:'55', time:'منذ ساعة'},
+  ];
   function openViewsModal(btn) {
+    const card = btn.closest('.post-card');
     const countEl = btn.querySelector('.views-count');
     const count = parseInt(countEl?.textContent||0);
     const list = document.getElementById('views-list');
     const total = document.getElementById('views-total');
     if (total) total.textContent = count + ' مشاهدة';
     if (list) {
-      // مشاهدات حقيقية فقط — لا بيانات وهمية
-      list.innerHTML = '<p style="text-align:center;color:var(--text-muted);font-family:var(--font-main);font-size:.85rem;padding:20px">لا توجد مشاهدات بعد</p>';
+      const viewers = FAKE_VIEWERS.slice(0, Math.min(count, FAKE_VIEWERS.length));
+      list.innerHTML = viewers.length ?
+        viewers.map(v=>`<div class="viewer-item"><img src="https://i.pravatar.cc/80?img=${v.img}" /><span>${v.name}</span><small>${v.time}</small></div>`).join('') :
+        '<p style="text-align:center;color:var(--text-muted);font-family:var(--font-main);font-size:.85rem;padding:20px">لا توجد مشاهدات بعد</p>';
     }
     document.getElementById('views-modal').classList.add('open');
+    // auto increment views on open
     if (countEl) countEl.textContent = count + 1;
   }
   function closeViewsModal() {
@@ -12626,53 +12618,6 @@ if (document.readyState === 'loading') {
 
 /* ══ ANALYTICS REAL DATA ══ */
 .analytics-stat .a-val { transition: all .3s; }
-
-/* ══ FRIEND PROFILE MODAL ══ */
-#friend-profile-modal {
-  animation: fadeIn .2s ease;
-}
-#friend-profile-modal button:hover {
-  opacity: .88;
-  transform: translateY(-1px);
-}
-
-/* ══ XP BAR REAL ══ */
-#xp-fill {
-  transition: width 1.2s cubic-bezier(.4,0,.2,1) !important;
-  background: linear-gradient(90deg, #1a6dff, #7c3aed, #a855f7) !important;
-}
-
-/* ══ INTERACTION LOG BADGE ══ */
-.interaction-logged-badge {
-  position: fixed; bottom: 76px; right: 12px;
-  background: linear-gradient(135deg,#16a34a,#0d9f6e);
-  color: #fff;
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-family: var(--font-main);
-  font-size: .75rem;
-  font-weight: 700;
-  z-index: 9000;
-  box-shadow: 0 4px 16px rgba(22,163,74,.35);
-  animation: fadeUp .3s ease, fadeOut .3s ease 1.8s forwards;
-  pointer-events: none;
-}
-@keyframes fadeOut { to { opacity: 0; transform: translateY(-8px); } }
-
-/* ══ LIVE DATA REFRESH INDICATOR ══ */
-.live-refresh-dot {
-  display: inline-block;
-  width: 7px; height: 7px;
-  background: #00c853;
-  border-radius: 50%;
-  animation: pulse 2s infinite;
-  margin-left: 4px;
-  vertical-align: middle;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .5; transform: scale(.7); }
-}
 </style>
 
 <script>
@@ -13836,9 +13781,11 @@ window.loginVerifyDoc = function() {
 };
 
 window.loginOpenRegister = function() {
-  // ── التسجيل عبر Firebase ──
+  // ── نموذج التسجيل المرتبط بـ Google Sheets ──
+  // هذا النموذج يُضيف السجل مباشرة في جدول البيانات
   const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLSeNcS0aycr8_SgtEBGRz8UJfCY8Sth83oj8bBH_jZE_yV2aKA/viewform';
   window.open(formUrl, '_blank');
+  // رسالة توجيهية للمستخدم
   loginShowOk('✅ أكمل التسجيل في النموذج ثم عُد وسجّل دخولك بالإيميل ذاته');
 };
 
@@ -13856,83 +13803,17 @@ function parseCSVRow(row) {
   return result;
 }
 
-// ── Google Sheets CSV URL للتحقق من الأعضاء ──────────────
-const LOGIN_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
-
-// ── حساب السن من تاريخ الميلاد ─────────────────────────
-function _calcAge(dob) {
-  if (!dob) return null;
-  try {
-    const b = new Date(dob);
-    if (isNaN(b.getTime())) return null;
-    const now = new Date();
-    let age = now.getFullYear() - b.getFullYear();
-    const m = now.getMonth() - b.getMonth();
-    if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age--;
-    return age >= 0 && age < 120 ? age : null;
-  } catch(e) { return null; }
-}
-
-// ── تحليل سطر CSV مع مراعاة علامات الاقتباس ───────────
-function _parseLoginCSVRow(row) {
-  const result = []; let cur = '', inQ = false;
-  for (let i = 0; i < row.length; i++) {
-    const ch = row[i];
-    if (ch === '"') { inQ = !inQ; continue; }
-    if (ch === ',' && !inQ) { result.push(cur.trim()); cur = ''; continue; }
-    cur += ch;
-  }
-  result.push(cur.trim());
-  return result;
-}
-
-// ── جلب بيانات العضو من Google Sheets بالإيميل ─────────
-async function _fetchMemberByEmail(email) {
-  try {
-    const res = await fetch(LOGIN_SHEET_CSV_URL + '&t=' + Date.now());
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const text = await res.text();
-    const lines = text.trim().split('\n').filter(l => l.trim());
-    if (lines.length < 2) return null;
-
-    for (let i = 1; i < lines.length; i++) {
-      const cols = _parseLoginCSVRow(lines[i]);
-      // العمود B (index 1) = الإيميل
-      const rowEmail = (cols[1] || '').trim().toLowerCase();
-      if (rowEmail === email) {
-        // استخراج البيانات حسب الأعمدة المحددة
-        const fullName     = (cols[2]  || '').trim();  // C — الاسم واللقب
-        const dob          = (cols[3]  || '').trim();  // D — تاريخ الميلاد → السن
-        const enrollDate   = (cols[6]  || '').trim();  // G — تاريخ الانخراط
-        const gender       = (cols[8]  || '').trim();  // I — الجنس
-        const category     = (cols[9]  || '').trim();  // J — الفئة
-        const points       = parseInt(cols[21]) || 0;  // V — النقاط
-        const stars        = parseInt(cols[22]) || 0;  // W — النجوم
-        const age          = _calcAge(dob);
-
-        return { fullName, dob, age, enrollDate, gender, category, points, stars };
-      }
-    }
-    return null; // الإيميل غير موجود في الجدول
-  } catch(e) {
-    console.warn('[Login Sheet] خطأ:', e.message);
-    return null;
-  }
-}
-
 // ── Main login function ──────────────────────────────────
 window.doLogin = async function() {
   loginClearErr();
   const emailEl = document.getElementById('login-email');
+  const passEl  = document.getElementById('login-pass');
   const btn     = document.getElementById('login-submit-btn');
   const btnText = document.getElementById('login-btn-text');
   const email   = (emailEl?.value || '').trim().toLowerCase();
+  const pass    = (passEl?.value || '').trim();
 
-  // ✅ قبول أي كلمة سر — التحقق فقط من الإيميل في Google Sheets
-  if (!email) {
-    loginShowErr('⚠️ أدخل بريدك الإلكتروني');
-    return;
-  }
+  if (!email || !pass) { loginShowErr(loginT('empty')); return; }
 
   const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRe.test(email)) {
@@ -13942,49 +13823,76 @@ window.doLogin = async function() {
   }
 
   if (btn) btn.classList.add('loading');
-  if (btnText) btnText.textContent = '🔍 جاري التحقق...';
+  if (btnText) btnText.textContent = loginT('loading');
 
   try {
-    // ── البحث عن الإيميل في Google Sheets ──
-    const memberData = await _fetchMemberByEmail(email);
+    // ── جلب جدول Google Sheets (CSV) ──
+    const sheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
+    const res = await fetch(sheetUrl + '&t=' + Date.now());
+    if (!res.ok) throw new Error('fetch_failed');
+    const csv = await res.text();
+    const allRows = csv.trim().split('\n');
 
-    if (!memberData) {
-      // الإيميل غير مسجل في الجدول
-      loginShowErr('❌ هذا الإيميل غير مسجل في المنصة. تأكد من الإيميل أو سجّل أولاً.', 'email');
-      if (btn) btn.classList.remove('loading');
-      if (btnText) btnText.textContent = loginT('login');
-      return;
+    const headers = parseCSVRow(allRows[0]).map(h => h.replace(/"/g,'').trim().toLowerCase());
+
+    // عمود الإيميل (index=1 افتراضي - العمود B)
+    let emailColIdx = headers.findIndex(h =>
+      h === 'email address' || h.includes('email') || h.includes('mail') ||
+      h.includes('إيميل') || h.includes('بريد')
+    );
+    if (emailColIdx < 0) emailColIdx = 1;
+
+    let userFound = false;
+
+    for (let i = 1; i < allRows.length; i++) {
+      const line = allRows[i].trim();
+      if (!line) continue;
+      const cols = parseCSVRow(line);
+      const rowEmail = (cols[emailColIdx] || '').replace(/"/g,'').trim().toLowerCase();
+      if (rowEmail && rowEmail === email) {
+        userFound = true;
+
+        // ── جلب البيانات حسب الأعمدة المحددة ──
+        // عمود C (index=2) = الاسم واللقب
+        const userName   = (cols[2]  || '').replace(/"/g,'').trim() || email.split('@')[0];
+        // عمود D (index=3) = السن
+        const userAge    = (cols[3]  || '').replace(/"/g,'').trim();
+        // عمود J (index=9) = الصورة الشمسية
+        const userPhoto  = (cols[9]  || '').replace(/"/g,'').trim();
+        // عمود L (index=11) = الفئة
+        const userCat    = (cols[11] || '').replace(/"/g,'').trim();
+        // عمود AC (index=28) = النقاط
+        const userPoints = (cols[28] || '0').replace(/[^\d.]/g,'') || '0';
+
+        // حفظ كل البيانات في localStorage
+        localStorage.setItem('cdz_logged_in',    '1');
+        localStorage.setItem('cdz_user_email',   email);
+        localStorage.setItem('cdz_user_display', userName);
+        localStorage.setItem('cdz_user_age',     userAge);
+        localStorage.setItem('cdz_user_photo',   userPhoto);
+        localStorage.setItem('cdz_user_cat',     userCat);
+        localStorage.setItem('cdz_user_points',  userPoints);
+
+        loginShowOk('✅ مرحباً ' + userName + '! جاري الدخول...');
+
+        setTimeout(() => {
+          document.getElementById('login-screen')?.classList.add('hidden');
+          applyAppLang(loginCurrentLang);
+          applyUserDataToApp();
+        }, 1400);
+        break;
+      }
     }
 
-    // ── العضو موجود — حفظ البيانات ──
-    const displayName = memberData.fullName || email.split('@')[0];
-
-    localStorage.setItem('cdz_logged_in',        '1');
-    localStorage.setItem('cdz_user_email',        email);
-    localStorage.setItem('cdz_user_display',      displayName);
-    localStorage.setItem('cdz_user_age',          memberData.age !== null ? String(memberData.age) : '');
-    localStorage.setItem('cdz_user_dob',          memberData.dob || '');
-    localStorage.setItem('cdz_user_enroll_date',  memberData.enrollDate || '');
-    localStorage.setItem('cdz_user_gender',       memberData.gender || '');
-    localStorage.setItem('cdz_user_cat',          memberData.category || '');
-    localStorage.setItem('cdz_user_points',       String(memberData.points || 0));
-    localStorage.setItem('cdz_user_stars',        String(memberData.stars || 0));
-    localStorage.setItem('cdz_user_photo',        '');
-
-    // ── رسالة ترحيب ──
-    const genderGreet = memberData.gender === 'أنثى' || memberData.gender === 'F' || memberData.gender === 'female'
-      ? 'مرحباً بك' : 'مرحباً بك';
-    loginShowOk('✅ ' + genderGreet + ' ' + displayName + '! جاري الدخول...');
-
-    setTimeout(() => {
-      document.getElementById('login-screen')?.classList.add('hidden');
-      applyAppLang(loginCurrentLang);
-      applyUserDataToApp();
-    }, 1400);
+    if (!userFound) {
+      loginShowErr('❌ هذا الإيميل غير مسجل في المنصة', 'email');
+      if (btn) btn.classList.remove('loading');
+      if (btnText) btnText.textContent = loginT('login');
+    }
 
   } catch(err) {
-    console.warn('Login error:', err);
-    loginShowErr('⚠️ تعذّر الاتصال. تحقق من الإنترنت وحاول مرة أخرى.');
+    console.warn('Login fetch error:', err);
+    loginShowErr('⚠️ تعذّر الاتصال بالخادم. تحقق من الإنترنت وحاول مرة أخرى', 'pass');
     if (btn) btn.classList.remove('loading');
     if (btnText) btnText.textContent = loginT('login');
   }
@@ -14072,31 +13980,6 @@ window.applyUserDataToApp = function() {
 
   const starTotal = document.getElementById('star-pts-total');
   if (starTotal) starTotal.textContent = pts.toLocaleString('ar-DZ');
-
-  // ── النجوم (عمود W من Google Sheets) ──
-  const starsCount = parseInt(localStorage.getItem('cdz_user_stars') || '0') || 0;
-  const profileStarEls = document.querySelectorAll('.profile-stars i');
-  profileStarEls.forEach((star, i) => {
-    star.classList.toggle('active', i < starsCount);
-  });
-  const starsDisplay = document.getElementById('profile-stars-display');
-  if (starsDisplay) starsDisplay.textContent = starsCount;
-
-  // ── الجنس (عمود I من Google Sheets) ──
-  const gender = localStorage.getItem('cdz_user_gender') || '';
-  if (gender) {
-    const genderEl = document.getElementById('profile-user-gender');
-    if (genderEl) { genderEl.textContent = gender; genderEl.style.display = 'block'; }
-  }
-
-  // ── تاريخ الانخراط (عمود G من Google Sheets) ──
-  const enrollDate = localStorage.getItem('cdz_user_enroll_date') || '';
-  if (enrollDate) {
-    const enrollEl = document.getElementById('profile-user-enroll');
-    if (enrollEl) { enrollEl.textContent = 'تاريخ الانخراط: ' + enrollDate; enrollEl.style.display = 'block'; }
-    const memberDateEl = document.getElementById('member-card-date');
-    if (memberDateEl) memberDateEl.textContent = enrollDate;
-  }
 
   // ── placeholder منشور ──
   const postInput = document.querySelector('.post-input');
@@ -14209,2199 +14092,728 @@ document.addEventListener('DOMContentLoaded', function() {
 
 </script>
 
-<!-- ══════════════════════════════════════════════════════════
-     🔧 CDZ MASTER FIX PATCH — إصلاح شامل
-     ══════════════════════════════════════════════════════════ -->
-<script>
-(function CDZ_MASTER_FIX() {
-'use strict';
+<!-- ═══════════════════════════════════════════════════════════════
+     🔥 FIREBASE + FIRESTORE + CLOUDINARY INTEGRATION PATCH
+     التكامل الحقيقي مع Firebase Firestore + Cloudinary
+     ═══════════════════════════════════════════════════════════════ -->
 
-// ═══════════════════════════════════════════════════════════
-// § 0 — إعدادات Firebase (تم نقل التهيئة إلى <head>)
-// ═══════════════════════════════════════════════════════════
+<!-- Firebase SDK v10 (modular, CDN) -->
+<script type="module">
+// ═══════════════════════════════════════════════════════════════
+//  FIREBASE CONFIG
+// ═══════════════════════════════════════════════════════════════
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, collection, addDoc, getDocs, onSnapshot,
+  doc, updateDoc, deleteDoc, query, orderBy, limit,
+  serverTimestamp, increment, arrayUnion, arrayRemove, getDoc,
+  setDoc, where
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  getAuth, signInAnonymously, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-// مساعد: كتابة في Firebase
-async function fbSet(path, data) {
-  try { await _fbDB.ref(path).set(data); return true; } catch(e) { return false; }
-}
-async function fbPush(path, data) {
-  try { const ref = await _fbDB.ref(path).push(data); return ref.key; } catch(e) { return null; }
-}
-async function fbGet(path) {
-  try { const snap = await _fbDB.ref(path).once('value'); return snap.exists() ? snap.val() : null; } catch(e) { return null; }
-}
-async function fbUpdate(path, data) {
-  try { await _fbDB.ref(path).update(data); return true; } catch(e) { return false; }
-}
+const firebaseConfig = {
+  apiKey: "AIzaSyBSv3L2J2cUjSw95ww3B7pdj2ZMvhbYZWU",
+  authDomain: "dz-34acf.firebaseapp.com",
+  projectId: "dz-34acf",
+  storageBucket: "dz-34acf.firebasestorage.app",
+  messagingSenderId: "544005586321",
+  appId: "1:544005586321:web:b3d5367402e9cdb8ac2e30",
+  measurementId: "G-4FFLXH5Z8M"
+};
 
-// ═══════════════════════════════════════════════════════════
-// § 1 — التحقق من اتصال Firebase
-// ═══════════════════════════════════════════════════════════
-async function ensureFirebaseTables() {
+const fbApp  = initializeApp(firebaseConfig);
+const db     = getFirestore(fbApp);
+const auth   = getAuth(fbApp);
+
+// ═══════════════════════════════════════════════════════════════
+//  CLOUDINARY CONFIG
+// ═══════════════════════════════════════════════════════════════
+const CLOUD_NAME   = "df486xmfj";
+const UPLOAD_PRESET = "smrt_kids_unsigned"; // unsigned preset — اصنعه في لوحة Cloudinary
+
+// رفع ملف (صورة / فيديو) إلى Cloudinary وإرجاع الـ URL الآمن
+window.cdnUpload = async function(file, folder = "posts") {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("upload_preset", UPLOAD_PRESET);
+  fd.append("folder", folder);
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`, {
+    method: "POST",
+    body: fd
+  });
+  if (!res.ok) throw new Error("Cloudinary upload failed");
+  const data = await res.json();
+  // تحويل تلقائي: f_auto,q_auto للصور
+  let url = data.secure_url;
+  if (data.resource_type === "image") {
+    url = url.replace("/upload/", "/upload/f_auto,q_auto/");
+  }
+  return { url, publicId: data.public_id, type: data.resource_type };
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  AUTH — تسجيل دخول مجهول لضمان الوصول لـ Firestore
+//  (المصادقة الحقيقية تتم من Google Sheet كما هو في الكود الأصلي)
+// ═══════════════════════════════════════════════════════════════
+signInAnonymously(auth).catch(e => console.warn("Auth:", e));
+
+onAuthStateChanged(auth, user => {
+  if (user) {
+    window._fbUid = user.uid;
+    // بعد تسجيل الدخول من الشيت — احفظ/حدّث بروفايل المستخدم
+    syncUserProfile();
+    // بدء الاستماع للمنشورات الحقيقية
+    startPostsListener();
+    // تحديث اللوحة الرقمية
+    updateLeaderboard();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  SYNC: مزامنة بيانات المستخدم من Google Sheet → Firestore
+// ═══════════════════════════════════════════════════════════════
+async function syncUserProfile() {
+  const email  = localStorage.getItem("cdz_user_email");
+  if (!email) return;
+
+  const name   = localStorage.getItem("cdz_user_display") || "";
+  const photo  = localStorage.getItem("cdz_user_photo")   || "";
+  const cat    = localStorage.getItem("cdz_user_cat")     || "";
+  const points = parseInt(localStorage.getItem("cdz_user_points") || "0");
+  const uid    = window._fbUid || email.replace(/[^a-zA-Z0-9]/g, "_");
+
   try {
-    const testPosts = await fbGet('posts');
-    window._fbPostsOk = true;
-    const testStories = await fbGet('stories');
-    window._fbStoriesOk = true;
-    const testInteractions = await fbGet('interactions');
-    window._fbInteractionsOk = true;
-  } catch(e) {
-    window._fbPostsOk = false;
-    window._fbStoriesOk = false;
-    window._fbInteractionsOk = false;
-    console.warn('[CDZ] Firebase غير متاح:', e);
+    const userRef = doc(db, "users", uid);
+    await setDoc(userRef, {
+      email, name, photo, category: cat, points,
+      lastSeen: serverTimestamp(),
+      uid
+    }, { merge: true });
+
+    window._cdz_uid  = uid;
+    window._cdz_name = name;
+
+    // جلب المنشورات الخاصة بهذا المستخدم وتحديث العداد
+    refreshUserPostCount(uid);
+  } catch (e) {
+    console.warn("syncUserProfile:", e);
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// § 2 — إصلاح عرض السن (من تاريخ الميلاد → سنة)
-// ═══════════════════════════════════════════════════════════
-function fixAgeDisplay() {
-  // السن في صفحة الملف الشخصي — من localStorage
-  const dob = (() => {
-    try {
-      const info = JSON.parse(localStorage.getItem('cdz_profile_info') || '{}');
-      return info.dob || localStorage.getItem('cdz_user_dob') || null;
-    } catch(e) { return null; }
-  })();
+// ═══════════════════════════════════════════════════════════════
+//  POSTS: الاستماع للمنشورات الحقيقية من Firestore
+// ═══════════════════════════════════════════════════════════════
+let _postsUnsubscribe = null;
 
-  if (dob) {
-    const age = calcAgeFromDob(dob);
-    const ageEl = document.getElementById('profile-user-age');
-    if (ageEl && age !== null) {
-      ageEl.textContent = 'العمر: ' + age + ' سنة';
-      ageEl.style.display = 'block';
-    }
-  }
+function startPostsListener() {
+  if (_postsUnsubscribe) _postsUnsubscribe();
 
-  // إصلاح renderMyInfoSection لعرض السن بدل تاريخ الميلاد
-  const origRender = window.renderMyInfoSection;
-  if (typeof origRender === 'function') {
-    window.renderMyInfoSection = function(info) {
-      // نُعدّل info مؤقتاً لإظهار السن
-      const infoCopy = { ...info };
-      if (infoCopy.dob) {
-        const age = calcAgeFromDob(infoCopy.dob);
-        infoCopy._ageDisplay = age !== null ? age + ' سنة' : infoCopy.dob;
+  const q = query(
+    collection(db, "posts"),
+    orderBy("createdAt", "desc"),
+    limit(30)
+  );
+
+  _postsUnsubscribe = onSnapshot(q, snapshot => {
+    snapshot.docChanges().forEach(change => {
+      const data = change.doc.data();
+      const id   = change.doc.id;
+
+      if (change.type === "added") {
+        injectFirestorePost(id, data);
       }
-      origRender.call(this, info);
-      // تعديل ما ظهر في الشاشة — استبدل تاريخ الميلاد بالسن
-      if (infoCopy.dob) {
-        const age = calcAgeFromDob(infoCopy.dob);
-        if (age !== null) {
-          const rows = document.querySelectorAll('.my-info-row');
-          rows.forEach(row => {
-            const lbl = row.querySelector('.my-info-label');
-            const val = row.querySelector('span:last-child');
-            if (lbl && val && lbl.textContent.includes('الميلاد')) {
-              lbl.textContent = 'السن';
-              val.textContent = age + ' سنة';
-            }
-          });
-        }
+      if (change.type === "modified") {
+        updatePostStats(id, data);
       }
-    };
-  }
-}
-
-function calcAgeFromDob(dob) {
-  if (!dob) return null;
-  try {
-    const b = new Date(dob);
-    if (isNaN(b.getTime())) return null;
-    const today = new Date();
-    let age = today.getFullYear() - b.getFullYear();
-    const m = today.getMonth() - b.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
-    return age >= 0 && age < 120 ? age : null;
-  } catch(e) { return null; }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 3 — إصلاح "ملف لا يظهر باسمي الحقيقي"
-//        ← تطبيق الاسم الحقيقي في كل مكان
-// ═══════════════════════════════════════════════════════════
-function fixRealName() {
-  const realName = localStorage.getItem('cdz_user_display') || '';
-  if (!realName) return;
-
-  // profile-name
-  const pn = document.getElementById('profile-name');
-  if (pn && (!pn.textContent.trim() || pn.textContent.trim() === 'اسم المستخدم')) {
-    pn.textContent = realName;
-  }
-
-  // profile-page h1
-  const h1 = document.querySelector('#profile-page .profile-name-section h1');
-  if (h1 && (!h1.textContent.trim() || h1.textContent.trim() === 'اسم المستخدم')) {
-    h1.textContent = realName;
-  }
-
-  // bcard-holder
-  const bc = document.getElementById('bcard-holder');
-  if (bc) bc.textContent = realName;
-
-  // memcard-name
-  const mc = document.getElementById('memcard-name');
-  if (mc) mc.textContent = realName;
-
-  // composer-author-name
-  const cn = document.getElementById('composer-author-name');
-  if (cn) cn.textContent = realName;
-
-  // wheel-profile-name
-  const wn = document.getElementById('wheel-profile-name');
-  if (wn) wn.textContent = realName;
-
-  // wheel-center-name
-  const wcn = document.getElementById('wheel-center-name');
-  if (wcn) wcn.textContent = realName.split(' ')[0];
-
-  // member-card-mini-name
-  const mmn = document.getElementById('member-card-mini-name');
-  if (mmn) mmn.textContent = realName;
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 4 — تصفير لوحة البيانات والتفاعلات (بدء من صفر حقيقي)
-// ═══════════════════════════════════════════════════════════
-function resetFakeDashboardStats() {
-  // تصفير العدادات الوهمية في updateAnalyticsDashboard
-  const origUpdate = window.updateAnalyticsDashboard;
-  window.updateAnalyticsDashboard = function() {
-    const feed = document.getElementById('feed-section');
-    if (!feed) return;
-    const posts = feed.querySelectorAll('.post-card');
-    let totalLikes = 0, totalComments = 0, totalViews = 0, totalShares = 0;
-
-    posts.forEach(post => {
-      const reactCount = post.querySelector('[id^="react-count-"]');
-      if (reactCount) totalLikes += parseInt(reactCount.textContent) || 0;
-      const commentCount = post.querySelector('[id^="cc-"]');
-      if (commentCount) totalComments += parseInt(commentCount.textContent) || 0;
-      const viewsCount = post.querySelector('[id^="vc-"]');
-      if (viewsCount) totalViews += parseInt(viewsCount.textContent) || 0;
-    });
-
-    // لا أرقام وهمية — فقط البيانات الحقيقية
-    const stats = document.querySelectorAll('.analytics-stat .a-val');
-    if (stats[0]) stats[0].textContent = totalViews > 1000 ? (totalViews/1000).toFixed(1)+'K' : totalViews || '0';
-    if (stats[1]) stats[1].textContent = totalComments || '0';
-    if (stats[2]) stats[2].textContent = totalLikes || '0';
-    if (stats[3]) stats[3].textContent = totalShares || '0';
-  };
-
-  // استدعاء فوري لتصفير الأرقام الوهمية
-  window.updateAnalyticsDashboard();
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 5 — حفظ المنشورات في Firebase + إصلاح الاختفاء
-// ═══════════════════════════════════════════════════════════
-
-// كاش المنشورات المحلية
-let _localPosts = [];
-try {
-  _localPosts = JSON.parse(localStorage.getItem('cdz_posts_cache') || '[]');
-} catch(e) { _localPosts = []; }
-
-function savePostsCache() {
-  try {
-    // احفظ آخر 30 منشور فقط (بدون dataUrl للتوفير)
-    const toSave = _localPosts.slice(0, 30).map(p => ({
-      ...p,
-      mediaDataUrls: [] // لا نحفظ الصور في localStorage
-    }));
-    localStorage.setItem('cdz_posts_cache', JSON.stringify(toSave));
-  } catch(e) {}
-}
-
-// رفع الصور إلى Cloudinary
-async function uploadToCloudinary(dataUrl) {
-  const CLOUD_NAME = 'dxnmtfhhb';
-  const UPLOAD_PRESET = 'connectdz_unsigned';
-  try {
-    const fd = new FormData();
-    fd.append('file', dataUrl);
-    fd.append('upload_preset', UPLOAD_PRESET);
-    const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/upload`, {
-      method: 'POST', body: fd
-    });
-    if (!r.ok) return null;
-    const d = await r.json();
-    return d.secure_url || null;
-  } catch(e) { return null; }
-}
-
-// حفظ منشور في Firebase
-async function savePostToFirebase(postData) {
-  try {
-    // رفع الصور أولاً
-    let mediaUrls = [];
-    if (postData.mediaDataUrls && postData.mediaDataUrls.length) {
-      const uploads = await Promise.all(
-        postData.mediaDataUrls.map(u => uploadToCloudinary(u))
-      );
-      mediaUrls = uploads.filter(Boolean);
-    }
-
-    const row = {
-      post_id: postData.id,
-      author_name: postData.authorName,
-      author_avatar: postData.authorAvatar,
-      text: postData.text || '',
-      theme: postData.theme || '',
-      media_urls: mediaUrls,
-      privacy: postData.privacy || 'عام',
-      type: 'post',
-      created_at: Date.now()
-    };
-    await _fbDB.ref('posts/' + postData.id).set(row);
-  } catch(e) {}
-}
-
-// تحميل المنشورات من Firebase
-async function loadPostsFromFirebase() {
-  try {
-    const snap = await _fbDB.ref('posts').orderByChild('created_at').limitToLast(50).once('value');
-    if (!snap.exists()) return;
-
-    const feed = document.getElementById('feed-section');
-    if (!feed) return;
-
-    const welcome = document.getElementById('feed-welcome-msg');
-    if (welcome) welcome.remove();
-
-    const currentUser = localStorage.getItem('cdz_user_display') || '';
-    const myAvatar = localStorage.getItem('cdz_user_photo') || '';
-
-    const postsArr = [];
-    snap.forEach(child => { postsArr.push(child.val()); });
-    postsArr.reverse(); // أحدث أولاً
-
-    postsArr.forEach(p => {
-      if (!p || p.type !== 'post') return;
-      if (document.querySelector(`[data-post-id="${p.post_id}"]`)) return;
-
-      const id = p.post_id || ('fb_' + Date.now());
-      const isOwner = p.author_name === currentUser;
-      const timeStr = formatRelativeTime(p.created_at);
-      const privacyIcon = '<i class="fa-solid fa-earth-africa fa-xs"></i>';
-      const avatarSrc = p.author_avatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.author_name)}`;
-
-      // حساب الإعجابات والتعليقات المحفوظة
-      const reactCount    = p.reactCount    || (p.reactions ? Object.keys(p.reactions).length : 0);
-      const commentCount  = p.commentCount  || 0;
-      // هل المستخدم الحالي أعجب بهذا المنشور؟
-      const userKey       = currentUser.replace(/\s/g,'_');
-      const userReaction  = p.reactions && p.reactions[userKey] ? p.reactions[userKey].emoji : '';
-
-      let mediaHtml = '';
-      if (p.media_urls && p.media_urls.length) {
-        const imgs = p.media_urls.filter(u => !u.includes('.mp4'));
-        if (imgs.length) {
-          const gridClass = `grid-${Math.min(imgs.length, 5)}`;
-          mediaHtml = `<div class="post-images-grid ${gridClass}">` +
-            imgs.map(u => `<div class="img-item"><img src="${u}" /></div>`).join('') +
-            `</div>`;
-        }
-      }
-
-      let textHtml = '';
-      if (p.text) {
-        if (p.theme) {
-          textHtml = `<div class="post-themed-text" style="background:${p.theme}">${escHtmlSafe(p.text)}</div>`;
-        } else {
-          textHtml = `<p class="post-text">${escHtmlSafe(p.text)}</p>`;
-        }
-      }
-
-      const article = document.createElement('article');
-      article.className = 'post-card';
-      article.dataset.postId = id;
-      article.dataset.fbId = id;
-
-      const menuItems = isOwner ? `
-        <div class="post-more-item" onclick="editPost(this)"><i class="fa-solid fa-pen"></i> تعديل</div>
-        <div class="post-more-item" onclick="deletePost(this)"><i class="fa-solid fa-trash"></i> حذف</div>
-        <div class="post-more-item" onclick="changePrivacy(this)"><i class="fa-solid fa-earth-africa"></i> الخصوصية</div>
-      ` : `<div class="post-more-item danger" onclick="reportPost(this)"><i class="fa-solid fa-flag"></i> تقديم بلاغ</div>`;
-
-      article.innerHTML = `
-        <div class="post-header">
-          <img class="avatar" src="${avatarSrc}" alt="${p.author_name}" onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.author_name)}'" />
-          <div class="post-meta">
-            <div class="post-author">${p.author_name}</div>
-            <div class="post-info"><span>${timeStr}</span>${privacyIcon}</div>
-          </div>
-          <button class="post-views-badge" onclick="openViewsModal(this)" title="من شاهد">👀 <span class="views-count">0</span></button>
-          <button class="more-btn" onclick="togglePostMenu(this)"><i class="fa-solid fa-ellipsis"></i></button>
-          <div class="post-more-menu">${menuItems}</div>
-        </div>
-        ${textHtml}${mediaHtml}
-        <div class="post-stats">
-          <div class="reactions" id="react-div-${id}">
-            <span class="reaction-emojis">${userReaction ? `<span style="font-size:.95rem">${userReaction}</span>` : ''}</span>
-            <span id="react-count-${id}">${reactCount > 0 ? reactCount : '0'}</span>
-          </div>
-          <div><span id="cc-${id}">${commentCount > 0 ? commentCount : '0'}</span> تعليق</div>
-        </div>
-        <div class="post-actions">
-          <div style="position:relative;flex:1;display:flex;justify-content:center">
-            <button class="reaction-btn${userReaction ? ' liked' : ''}" id="like-btn-${id}" data-reaction="${userReaction}">
-              <i class="fa-${userReaction ? 'solid' : 'regular'} fa-thumbs-up"></i> ${userReaction || 'إعجاب'}
-            </button>
-              <i class="fa-regular fa-thumbs-up"></i> إعجاب
-            </button>
-            <div class="reactions-popup" id="rp-${id}">
-              ${(window.POST_EMOJIS||[{em:'👍',label:'إعجاب'},{em:'❤️',label:'قلب'},{em:'😂',label:'ضحك'},{em:'😮',label:'واو'},{em:'😢',label:'حزن'},{em:'😡',label:'غضب'},{em:'🙏',label:'شكراً'}])
-                .map(r=>`<div class="react-item" onclick="pickReaction(${JSON.stringify(id)},'${r.em}')"><span class="react-emoji">${r.em}</span><span class="react-label">${r.label}</span></div>`).join('')}
-            </div>
-          </div>
-          <button class="reaction-btn" onclick="toggleComments(${JSON.stringify(id)})">
-            <i class="fa-regular fa-comment"></i> تعليق
-          </button>
-          <button class="reaction-btn" onclick="openShareModal(${JSON.stringify(id)})">
-            <i class="fa-regular fa-share-from-square"></i> مشاركة
-          </button>
-        </div>
-        <div class="post-comments-section" id="comments-${id}">
-          <div class="comment-input-row">
-            <img src="${myAvatar || 'https://i.pravatar.cc/80?img=5'}" alt="" />
-            <div class="comment-input-wrap">
-              <input type="text" placeholder="اكتب تعليقاً..." id="ci-${id}"
-                onkeydown="if(event.key==='Enter')submitComment(${JSON.stringify(id)})" />
-              <button class="comment-send-btn" onclick="submitComment(${JSON.stringify(id)})">
-                <i class="fa-solid fa-paper-plane"></i>
-              </button>
-            </div>
-          </div>
-          <div class="comments-list" id="cl-${id}"></div>
-        </div>`;
-
-      feed.appendChild(article);
-
-      if (typeof window.bindPostEvents === 'function') {
-        window.bindPostEvents(article);
+      if (change.type === "removed") {
+        document.querySelector(`[data-fsid="${id}"]`)?.remove();
       }
     });
-  } catch(e) { console.warn('[CDZ] loadPostsFromFirebase error:', e); }
-}
-// alias للتوافق
-const loadPostsFromSupabase = loadPostsFromFirebase;
-
-function escHtmlSafe(str) {
-  if (!str) return '';
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }, err => console.warn("Posts listener:", err));
 }
 
-function formatRelativeTime(ts) {
-  if (!ts) return 'الآن';
-  const t = typeof ts === 'number' ? ts : new Date(ts).getTime();
-  const diff = (Date.now() - t) / 60000;
-  if (diff < 1) return 'الآن';
-  if (diff < 60) return `منذ ${Math.floor(diff)} د`;
-  if (diff < 1440) return `منذ ${Math.floor(diff/60)} س`;
-  return `منذ ${Math.floor(diff/1440)} يوم`;
-}
-
-// اعتراض publishPost لحفظ المنشور في Firebase
-function patchPublishPostForFirebase() {
-  const origPublish = window.publishPost;
-  if (typeof origPublish !== 'function') {
-    setTimeout(patchPublishPostForFirebase, 400);
-    return;
-  }
-  if (origPublish._fbPatched) return;
-
-  window.publishPost = async function() {
-    // التقط النص والبيانات قبل استدعاء الأصلية (لأن الأصلية تمسح الحقول)
-    const text         = document.getElementById('composer-textarea')?.value?.trim() || '';
-    const authorName   = localStorage.getItem('cdz_user_display') || '';
-    const authorAvatar = document.getElementById('profile-pic')?.src || '';
-    const theme        = document.querySelector('#composer-themes-row .theme-btn.active')?.dataset?.bg || '';
-
-    // التقط الصور قبل النشر
-    const mediaDataUrls = [];
-    document.querySelectorAll('#composer-preview-grid img, #composer-preview img').forEach(img => {
-      if (img.src && img.src.startsWith('data:')) mediaDataUrls.push(img.src);
-    });
-
-    // استدعاء الدالة الأصلية
-    origPublish.call(this);
-
-    // انتظر حتى يظهر المنشور الجديد في الـ DOM
-    await new Promise(r => setTimeout(r, 350));
-    const feed = document.getElementById('feed-section');
-    if (!feed) return;
-
-    // المنشور الجديد دائماً هو الأول في الـ feed (insertBefore firstChild)
-    const allCards = feed.querySelectorAll('.post-card');
-    const newPost  = allCards[0];
-    if (!newPost) return;
-
-    // توليد ID فريد إذا لم يكن موجوداً
-    if (!newPost.dataset.postId) {
-      newPost.dataset.postId = 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
-    }
-    const postId = newPost.dataset.postId;
-
-    const postData = {
-      id: postId,
-      authorName,
-      authorAvatar,
-      text,
-      theme,
-      mediaDataUrls,
-      privacy: 'عام'
-    };
-
-    // حفظ في كاش localStorage
-    _localPosts.unshift(postData);
-    if (_localPosts.length > 50) _localPosts.pop();
-    savePostsCache();
-
-    // حفظ في Firebase (الصور ترفع Cloudinary داخل savePostToFirebase)
-    await savePostToFirebase(postData);
-
-    // تسجيل نقاط نشر المنشور
-    if (typeof logInteractionToSheet === 'function') {
-      logInteractionToSheet('post', 10, 'نشر منشور: ' + text.substring(0, 40));
-    }
-  };
-  window.publishPost._fbPatched = true;
-}
-// alias للتوافق
-const patchPublishPostForSupabase = patchPublishPostForFirebase;
-
-// ═══════════════════════════════════════════════════════════
-// § 6 — حفظ القصص في Firebase + إصلاح نشرها
-// ═══════════════════════════════════════════════════════════
-
-// اعتراض gostaPublish لحفظ القصة في Supabase وإصلاح النشر
-function patchGostaPublish() {
-  // مراقبة gostaStories للتغييرات
-  if (typeof window.gostaStories !== 'undefined') {
-    patchGostaStories();
-  } else {
-    setTimeout(patchGostaStories, 1000);
-  }
-}
-
-function patchGostaStories() {
-  // ── الطريقة 1: اعتراض closeGostaTime (تُستدعى بعد اكتمال النشر) ──
-  const origCloseGosta = window.closeGostaTime;
-  if (typeof origCloseGosta === 'function' && !origCloseGosta._storySavePatch) {
-    window.closeGostaTime = function() {
-      origCloseGosta.call(this);
-      setTimeout(() => {
-        const stories = window.gostaStories || [];
-        if (!stories.length) return;
-        const latest = stories[0];
-        if (!latest) return;
-        const storyKey = 'cdz_story_saved_' + String(latest.id);
-        if (!localStorage.getItem(storyKey)) {
-          localStorage.setItem(storyKey, '1');
-          saveStoryToFirebase(latest);
-        }
-      }, 600);
-    };
-    window.closeGostaTime._storySavePatch = true;
-  }
-
-  // ── الطريقة 2: اعتراض renderStoryCards لضمان ظهور البطاقات ──
-  const origRenderCards = window.renderStoryCards;
-  if (typeof origRenderCards === 'function' && !origRenderCards._renderPatched) {
-    window.renderStoryCards = function() {
-      origRenderCards.call(this);
-      const scroll = document.querySelector('#stories-section .stories-scroll');
-      if (scroll && window.gostaStories && window.gostaStories.length) {
-        const dynamicCards = scroll.querySelectorAll('.story-card.dynamic-story');
-        if (!dynamicCards.length && window.gostaStories.length) {
-          setTimeout(() => origRenderCards.call(this), 200);
-        }
-      }
-    };
-    window.renderStoryCards._renderPatched = true;
-  }
-
-  // ── الطريقة 3: اعتراض زر النشر (fallback لحالة فتح Modal لاحقاً) ──
-  function bindGostaBtn() {
-    const publishBtn = document.querySelector('.gosta-publish-btn, #gosta-publish-btn');
-    if (publishBtn && !publishBtn._patched) {
-      publishBtn._patched = true;
-      const origClick = publishBtn.onclick;
-      publishBtn.onclick = async function(e) {
-        if (origClick) origClick.call(this, e);
-        await new Promise(r => setTimeout(r, 2800));
-        const story = window.gostaStories && window.gostaStories[0];
-        if (!story) return;
-        const storyKey = 'cdz_story_saved_' + String(story.id);
-        if (!localStorage.getItem(storyKey)) {
-          localStorage.setItem(storyKey, '1');
-          saveStoryToFirebase(story);
-        }
-        if (typeof window.renderStoryCards === 'function') window.renderStoryCards();
-      };
-    }
-  }
-  bindGostaBtn();
-  setTimeout(bindGostaBtn, 1500);
-
-  // ── الطريقة 4: اعتراض openGostaTime لربط الزر بعد فتح النافذة ──
-  const origOpen = window.openGostaTime;
-  if (typeof origOpen === 'function' && !origOpen._openPatched) {
-    window.openGostaTime = function() {
-      origOpen.call(this);
-      setTimeout(bindGostaBtn, 500);
-    };
-    window.openGostaTime._openPatched = true;
-  }
-}
-
-async function saveStoryToFirebase(story) {
-  try {
-    let mediaUrl = null;
-    if (story.mediaUrl && story.mediaUrl.startsWith('data:')) {
-      mediaUrl = await uploadToCloudinary(story.mediaUrl);
-    }
-
-    const row = {
-      story_id: String(story.id),
-      author_name: story.authorName,
-      author_avatar: story.authorAvatar,
-      media_url: mediaUrl || story.mediaUrl || '',
-      media_type: story.mediaType || 'text',
-      text: story.text || '',
-      theme_bg: story.themeBg || '',
-      type: 'story',
-      expires_at: story.timestamp + 86400000,
-      created_at: story.timestamp
-    };
-    await _fbDB.ref('stories/' + row.story_id).set(row);
-  } catch(e) {}
-}
-// alias للتوافق
-const saveStoryToSupabase = saveStoryToFirebase;
-
-// تحميل القصص من Firebase
-async function loadStoriesFromFirebase() {
-  try {
-    const now = Date.now();
-    const snap = await _fbDB.ref('stories').orderByChild('expires_at').startAt(now).once('value');
-    if (!snap.exists()) return;
-
-    if (!window.gostaStories) window.gostaStories = [];
-    const currentUser = localStorage.getItem('cdz_user_display') || '';
-
-    snap.forEach(child => {
-      const s = child.val();
-      const existing = window.gostaStories.find(gs => String(gs.id) === String(s.story_id));
-      if (!existing) {
-        window.gostaStories.push({
-          id: s.story_id,
-          type: s.media_type || 'text',
-          mediaUrl: s.media_url,
-          mediaType: s.media_type,
-          text: s.text || '',
-          themeBg: s.theme_bg || '#1a6dff',
-          authorName: s.author_name,
-          authorAvatar: s.author_avatar,
-          timestamp: s.created_at || now,
-          views: 0,
-          reactions: {},
-          comments: [],
-          isOwn: s.author_name === currentUser
-        });
-      }
-    });
-
-    if (typeof window.renderStoryCards === 'function') {
-      window.renderStoryCards();
-    }
-  } catch(e) {}
-}
-// alias للتوافق
-const loadStoriesFromSupabase = loadStoriesFromFirebase;
-
-// ═══════════════════════════════════════════════════════════
-// § 7 — إصلاح خروج تلقائي عند تحميل جداول البطولة
-// ═══════════════════════════════════════════════════════════
-function fixTournamentAutoLogout() {
-  // المشكلة: عند تحميل البطولة يُعاد تحميل الصفحة أو يختفي المستخدم
-  // الحل: تأكد أن loadBeginnersDivision لا تُعيد تعيين المستخدم
-
-  const origLoad = window.loadBeginnersDivision;
-  if (typeof origLoad === 'function') {
-    window.loadBeginnersDivision = async function() {
-      // حفظ بيانات المستخدم قبل التحميل
-      const savedLogin = localStorage.getItem('cdz_logged_in');
-      const savedUser = localStorage.getItem('cdz_user_display');
-
-      await origLoad.call(this);
-
-      // التأكد من عدم فقدان بيانات المستخدم
-      if (savedLogin && !localStorage.getItem('cdz_logged_in')) {
-        localStorage.setItem('cdz_logged_in', savedLogin);
-      }
-      if (savedUser && !localStorage.getItem('cdz_user_display')) {
-        localStorage.setItem('cdz_user_display', savedUser);
-      }
-    };
-  }
-
-  // إصلاح: منع إعادة التوجيه عند تحميل البطولة
-  const origNavigateTo = window.navigateTo;
-  if (typeof origNavigateTo === 'function') {
-    window.navigateTo = function(page) {
-      // قبل الانتقال، حفظ حالة تسجيل الدخول
-      const loginState = localStorage.getItem('cdz_logged_in');
-      origNavigateTo.call(this, page);
-      // التحقق بعد الانتقال
-      if (loginState === '1' && localStorage.getItem('cdz_logged_in') !== '1') {
-        localStorage.setItem('cdz_logged_in', '1');
-      }
-    };
-  }
-
-  // إصلاح: renderBeginnerDivision يستخدم الأعضاء الحقيقيين فقط
-  const origRender = window.renderBeginnerDivision;
-  if (typeof origRender === 'function') {
-    window.renderBeginnerDivision = function() {
-      // التأكد أن beginnersDivisionData يحتوي على أسماء حقيقية فقط
-      if (window.beginnersDivisionData) {
-        // فلترة أي بيانات وهمية
-        window.beginnersDivisionData = window.beginnersDivisionData.filter(p => p && p.name && p.name.trim());
-      }
-      origRender.call(this);
-    };
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 8 — سحب للتحديث (Pull to Refresh)
-// ═══════════════════════════════════════════════════════════
-function initPullToRefresh() {
-  const app = document.getElementById('app');
-  if (!app || app._ptrInit) return;
-  app._ptrInit = true;
-
-  let startY = 0;
-  let isPulling = false;
-  let refreshIndicator = null;
-
-  function createIndicator() {
-    const el = document.createElement('div');
-    el.id = 'ptr-indicator';
-    el.style.cssText = `
-      position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
-      background: #fff; border-radius: 999px; padding: 8px 18px;
-      font-family: var(--font-main); font-size: .82rem; font-weight: 700;
-      color: var(--primary); box-shadow: 0 4px 16px rgba(0,0,0,.12);
-      display: none; align-items: center; gap: 8px; z-index: 9999;
-      transition: opacity .2s;
-    `;
-    el.innerHTML = `<i class="fa-solid fa-arrows-rotate fa-spin" style="color:var(--primary)"></i> جارٍ التحديث...`;
-    document.body.appendChild(el);
-    return el;
-  }
-
-  refreshIndicator = createIndicator();
-
-  document.addEventListener('touchstart', e => {
-    if (window.scrollY === 0) {
-      startY = e.touches[0].clientY;
-      isPulling = true;
-    }
-  }, { passive: true });
-
-  document.addEventListener('touchmove', e => {
-    if (!isPulling) return;
-    const dy = e.touches[0].clientY - startY;
-    if (dy > 60) {
-      refreshIndicator.style.display = 'flex';
-    }
-  }, { passive: true });
-
-  document.addEventListener('touchend', async e => {
-    if (!isPulling) return;
-    isPulling = false;
-    const dy = (e.changedTouches[0]?.clientY || startY) - startY;
-
-    if (dy > 60) {
-      refreshIndicator.style.display = 'flex';
-      refreshIndicator.innerHTML = `<i class="fa-solid fa-arrows-rotate fa-spin" style="color:var(--primary)"></i> جارٍ التحديث...`;
-
-      await refreshAllData();
-
-      refreshIndicator.innerHTML = `<i class="fa-solid fa-check" style="color:#16a34a"></i> تم التحديث!`;
-      setTimeout(() => { refreshIndicator.style.display = 'none'; }, 1200);
-    }
-  }, { passive: true });
-}
-
-async function refreshAllData() {
-  // تحديث البيانات من Firebase
-  await Promise.all([
-    loadPostsFromFirebase(),
-    loadStoriesFromFirebase(),
-    refreshTournament()
-  ]);
-
-  if (typeof window.updateAllPointsDisplays === 'function') {
-    window.updateAllPointsDisplays();
-  }
-  if (typeof window.updateAnalyticsDashboard === 'function') {
-    window.updateAnalyticsDashboard();
-  }
-}
-
-async function refreshTournament() {
-  if (window.beginnersDivisionData === null && typeof window.loadBeginnersDivision === 'function') {
-    await window.loadBeginnersDivision();
-  } else if (typeof window.renderBeginnerDivision === 'function') {
-    window.renderBeginnerDivision();
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 9 — إصلاح نشر القصة (لا تظهر في الشريط)
-// ═══════════════════════════════════════════════════════════
-function fixStoryPublish() {
-  // مراقبة زر نشر القصة بشكل مباشر
-  function bindGostaPublishBtn() {
-    const btn = document.querySelector('.gosta-publish-btn');
-    if (!btn || btn._fixed) return;
-    btn._fixed = true;
-
-    btn.addEventListener('click', function() {
-      // نتحقق بعد 3 ثواني أن القصة ظهرت
-      setTimeout(() => {
-        const scroll = document.querySelector('#stories-section .stories-scroll');
-        const stories = window.gostaStories || [];
-        if (!scroll || !stories.length) return;
-
-        const dynamicCards = scroll.querySelectorAll('.story-card.dynamic-story');
-        if (!dynamicCards.length) {
-          // لم تظهر — نُعيد الرسم
-          if (typeof window.renderStoryCards === 'function') {
-            window.renderStoryCards();
-          }
-        }
-      }, 3200);
-    });
-  }
-
-  // محاولة ربط الزر عدة مرات
-  bindGostaPublishBtn();
-  setTimeout(bindGostaPublishBtn, 1000);
-  setTimeout(bindGostaPublishBtn, 3000);
-
-  // مراقبة فتح نافذة القصص
-  const origOpen = window.openGostaTime;
-  if (typeof origOpen === 'function') {
-    window.openGostaTime = function() {
-      origOpen.call(this);
-      setTimeout(bindGostaPublishBtn, 500);
-    };
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 10 — حفظ التعليقات والتفاعلات في Firebase
-// ═══════════════════════════════════════════════════════════
-function patchInteractionsForFirebase() {
-  // اعتراض submitComment
-  const origSubmit = window.submitComment;
-  if (typeof origSubmit === 'function' && !origSubmit._fbPatched) {
-    window.submitComment = async function(postId) {
-      const input = document.getElementById('ci-' + postId);
-      const text  = input ? input.value.trim() : '';
-      origSubmit.call(this, postId);
-      try {
-        if (!text) return;
-        const authorName = localStorage.getItem('cdz_user_display') || '';
-        const ts = Date.now();
-        // حفظ التعليق في interactions
-        await fbPush('interactions', {
-          post_id: String(postId),
-          author_name: authorName,
-          type: 'comment',
-          content: text,
-          created_at: ts
-        });
-        // تحديث عداد التعليقات في المنشور
-        const countRef = _fbDB.ref('posts/' + String(postId) + '/commentCount');
-        countRef.transaction(v => (v || 0) + 1);
-      } catch(e) {}
-    };
-    window.submitComment._fbPatched = true;
-  }
-
-  // اعتراض quickLike — حفظ الإعجاب في Firebase مع المنشور
-  const origLike = window.quickLike;
-  if (typeof origLike === 'function' && !origLike._fbPatched) {
-    window.quickLike = async function(postId) {
-      origLike.call(this, postId);
-      try {
-        const authorName = localStorage.getItem('cdz_user_display') || '';
-        if (!authorName) return;
-        const likeRef = _fbDB.ref('posts/' + String(postId) + '/reactions/' + authorName.replace(/\s/g,'_'));
-        const snap = await likeRef.once('value');
-        if (snap.exists()) {
-          // إلغاء الإعجاب
-          await likeRef.remove();
-          _fbDB.ref('posts/' + String(postId) + '/reactCount').transaction(v => Math.max(0, (v||0) - 1));
-        } else {
-          // إضافة الإعجاب
-          await likeRef.set({ emoji: '👍', ts: Date.now() });
-          _fbDB.ref('posts/' + String(postId) + '/reactCount').transaction(v => (v||0) + 1);
-        }
-      } catch(e) {}
-    };
-    window.quickLike._fbPatched = true;
-  }
-
-  // اعتراض pickReaction — حفظ الإيموجي المختار في Firebase
-  const origPickReaction = window.pickReaction;
-  if (typeof origPickReaction === 'function' && !origPickReaction._fbPatched) {
-    window.pickReaction = async function(postId, emoji) {
-      origPickReaction.call(this, postId, emoji);
-      try {
-        const authorName = localStorage.getItem('cdz_user_display') || '';
-        if (!authorName) return;
-        await _fbDB.ref('posts/' + String(postId) + '/reactions/' + authorName.replace(/\s/g,'_'))
-          .set({ emoji, ts: Date.now() });
-        _fbDB.ref('posts/' + String(postId) + '/reactCount').transaction(v => (v||0) + 1);
-      } catch(e) {}
-    };
-    window.pickReaction._fbPatched = true;
-  }
-}
-// alias للتوافق
-const patchInteractionsForSupabase = patchInteractionsForFirebase;
-
-// ═══════════════════════════════════════════════════════════
-// § 10b — حفظ الومضات (Flash Videos) في Firebase
-// ═══════════════════════════════════════════════════════════
-
-async function saveFlashToFirebase(video) {
-  try {
-    const id = video.id || ('flash_' + Date.now());
-    // رفع الفيديو إلى Cloudinary إذا كان base64
-    let cloudUrl = video.cloudUrl || video.dataUrl || '';
-    if (cloudUrl && cloudUrl.startsWith('data:')) {
-      const uploaded = await uploadToCloudinary(cloudUrl);
-      if (uploaded) cloudUrl = uploaded;
-      else cloudUrl = ''; // لا نحفظ base64 ضخم في Firebase
-    }
-    const row = {
-      id,
-      cloudUrl,
-      authorName:   video.authorName   || '',
-      authorAvatar: video.authorAvatar || '',
-      publishedAt:  video.publishedAt  || Date.now(),
-      expiresAt:    (video.publishedAt || Date.now()) + (3 * 86400000), // 3 أيام
-      likes:        video.likes        || 0,
-      type:         'flash'
-    };
-    await _fbDB.ref('flashVideos/' + id).set(row);
-  } catch(e) {}
-}
-
-async function loadFlashVideosFromFirebase() {
-  try {
-    const now = Date.now();
-    const snap = await _fbDB.ref('flashVideos').orderByChild('expiresAt').startAt(now).once('value');
-    if (!snap.exists()) return;
-    const currentUser = localStorage.getItem('cdz_user_display') || '';
-    snap.forEach(child => {
-      const v = child.val();
-      if (!v || v.type !== 'flash') return;
-      // تحقق هل مضى 3 أيام
-      if (v.expiresAt && now > v.expiresAt) return;
-      if (!window.flashVideos) window.flashVideos = [];
-      const exists = window.flashVideos.find(f => String(f.id) === String(v.id));
-      if (!exists) {
-        window.flashVideos.unshift({
-          id:           v.id,
-          dataUrl:      v.cloudUrl || '',
-          cloudUrl:     v.cloudUrl || '',
-          authorName:   v.authorName,
-          authorAvatar: v.authorAvatar,
-          publishedAt:  v.publishedAt,
-          likes:        v.likes || 0,
-          comments:     [],
-          userLiked:    false,
-          isOwn:        v.authorName === currentUser
-        });
-      }
-    });
-    // تحديث شبكة الومضات إن كانت مرئية
-    if (typeof window.renderFlashGrid === 'function') window.renderFlashGrid();
-  } catch(e) {}
-}
-
-function patchFlashVideoPublish() {
-  // اعتراض notifyNewFlashVideo لحفظ كل ومضة جديدة
-  const origNotify = window.notifyNewFlashVideo;
-  if (typeof origNotify === 'function' && !origNotify._flashFbPatched) {
-    window.notifyNewFlashVideo = async function(entry) {
-      origNotify.call(this, entry);
-      if (entry) {
-        // تأكد من وجود ID
-        if (!entry.id) entry.id = 'flash_' + Date.now();
-        await saveFlashToFirebase(entry);
-      }
-    };
-    window.notifyNewFlashVideo._flashFbPatched = true;
-  }
-
-  // اعتراض flashDeleteVideo لحذف من Firebase أيضاً
-  const origDelete = window.flashDeleteVideo;
-  if (typeof origDelete === 'function' && !origDelete._flashFbPatched) {
-    window.flashDeleteVideo = async function() {
-      const videoToDelete = window.currentFlashVideo;
-      origDelete.call(this);
-      if (videoToDelete && videoToDelete.id) {
-        try { await _fbDB.ref('flashVideos/' + videoToDelete.id).remove(); } catch(e) {}
-      }
-    };
-    window.flashDeleteVideo._flashFbPatched = true;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 11 — إصلاح البطولة: أعضاء حقيقيون فقط بلا وهميين
-// ═══════════════════════════════════════════════════════════
-function fixTournamentRealMembersOnly() {
-  // قائمة الأسماء الوهمية المعروفة للإزالة
-  const fakeNames = new Set([
-    'أحمد سعيد', 'محمد', 'فاطمة', 'سارة', 'علي',
-    'مستخدم', 'user', 'test', 'demo'
-  ]);
-
-  const origRenderBeginner = window.renderBeginnerDivision;
-  if (typeof origRenderBeginner === 'function') {
-    window.renderBeginnerDivision = function() {
-      // فلترة الأسماء الوهمية
-      if (window.beginnersDivisionData) {
-        window.beginnersDivisionData = window.beginnersDivisionData.filter(p => {
-          if (!p || !p.name) return false;
-          const name = p.name.trim().toLowerCase();
-          if (!name || name.length < 2) return false;
-          if (fakeNames.has(name)) return false;
-          return true;
-        });
-      }
-      origRenderBeginner.call(this);
-    };
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 12 — استعادة المنشورات من الكاش عند التحميل
-// ═══════════════════════════════════════════════════════════
-function restorePostsFromCache() {
-  if (!_localPosts.length) return;
-  const feed = document.getElementById('feed-section');
+// ═══════════════════════════════════════════════════════════════
+//  INJECT: أضف منشوراً حقيقياً في الـ Feed
+// ═══════════════════════════════════════════════════════════════
+function injectFirestorePost(id, data) {
+  const feed = document.getElementById("feed-section");
   if (!feed) return;
 
-  // أزل رسالة الترحيب
-  const welcome = document.getElementById('feed-welcome-msg');
+  // لا تضيف مرّتين
+  if (document.querySelector(`[data-fsid="${id}"]`)) return;
 
-  const currentUser = localStorage.getItem('cdz_user_display') || '';
-  const myAvatar = localStorage.getItem('cdz_user_photo') || '';
+  const avatarSrc  = data.authorPhoto  || `https://ui-avatars.com/api/?name=${encodeURIComponent(data.authorName||"?")}&background=1a6dff&color=fff&size=80`;
+  const authorName = data.authorName   || "عضو";
+  const timeStr    = data.createdAt?.toDate
+    ? formatTime(data.createdAt.toDate())
+    : "الآن";
 
-  _localPosts.forEach(p => {
-    if (document.querySelector(`[data-post-id="${p.id}"]`)) return;
-    if (!p.authorName || !p.text) return;
-
-    const isOwner = p.authorName === currentUser;
-    const avatarSrc = p.authorAvatar || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.authorName)}`;
-
-    let textHtml = '';
-    if (p.text) {
-      if (p.theme) {
-        textHtml = `<div class="post-themed-text" style="background:${p.theme}">${escHtmlSafe(p.text)}</div>`;
-      } else {
-        textHtml = `<p class="post-text">${escHtmlSafe(p.text)}</p>`;
-      }
-    }
-
-    const id = p.id;
-    const menuItems = isOwner ? `
-      <div class="post-more-item" onclick="editPost(this)"><i class="fa-solid fa-pen"></i> تعديل</div>
-      <div class="post-more-item" onclick="deletePost(this)"><i class="fa-solid fa-trash"></i> حذف</div>
-      <div class="post-more-item" onclick="changePrivacy(this)"><i class="fa-solid fa-earth-africa"></i> الخصوصية</div>
-    ` : `<div class="post-more-item danger" onclick="reportPost(this)"><i class="fa-solid fa-flag"></i> تقديم بلاغ</div>`;
-
-    const article = document.createElement('article');
-    article.className = 'post-card';
-    article.dataset.postId = id;
-    article.innerHTML = `
-      <div class="post-header">
-        <img class="avatar" src="${avatarSrc}" alt="${p.authorName}"
-          onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.authorName)}'" />
-        <div class="post-meta">
-          <div class="post-author">${p.authorName}</div>
-          <div class="post-info"><span>مؤخراً</span><i class="fa-solid fa-earth-africa fa-xs"></i></div>
-        </div>
-        <button class="post-views-badge" onclick="openViewsModal(this)" title="من شاهد">👀 <span class="views-count">0</span></button>
-        <button class="more-btn" onclick="togglePostMenu(this)"><i class="fa-solid fa-ellipsis"></i></button>
-        <div class="post-more-menu">${menuItems}</div>
-      </div>
-      ${textHtml}
-      <div class="post-stats">
-        <div class="reactions" id="react-div-${id}">
-          <span class="reaction-emojis"></span>
-          <span id="react-count-${id}">0</span>
-        </div>
-        <div><span id="cc-${id}">0</span> تعليق</div>
-      </div>
-      <div class="post-actions">
-        <div style="position:relative;flex:1;display:flex;justify-content:center">
-          <button class="reaction-btn" id="like-btn-${id}" data-reaction="">
-            <i class="fa-regular fa-thumbs-up"></i> إعجاب
-          </button>
-          <div class="reactions-popup" id="rp-${id}">
-            ${(window.POST_EMOJIS||[{em:'👍',label:'إعجاب'},{em:'❤️',label:'قلب'},{em:'😂',label:'ضحك'},{em:'😮',label:'واو'},{em:'😢',label:'حزن'},{em:'😡',label:'غضب'}])
-              .map(r=>`<div class="react-item" onclick="pickReaction(${JSON.stringify(id)},'${r.em}')"><span class="react-emoji">${r.em}</span><span class="react-label">${r.label}</span></div>`).join('')}
-          </div>
-        </div>
-        <button class="reaction-btn" onclick="toggleComments(${JSON.stringify(id)})">
-          <i class="fa-regular fa-comment"></i> تعليق
-        </button>
-        <button class="reaction-btn" onclick="openShareModal(${JSON.stringify(id)})">
-          <i class="fa-regular fa-share-from-square"></i> مشاركة
-        </button>
-      </div>
-      <div class="post-comments-section" id="comments-${id}">
-        <div class="comment-input-row">
-          <img src="${myAvatar || 'https://i.pravatar.cc/80?img=5'}" alt="" />
-          <div class="comment-input-wrap">
-            <input type="text" placeholder="اكتب تعليقاً..." id="ci-${id}"
-              onkeydown="if(event.key==='Enter')submitComment(${JSON.stringify(id)})" />
-            <button class="comment-send-btn" onclick="submitComment(${JSON.stringify(id)})">
-              <i class="fa-solid fa-paper-plane"></i>
-            </button>
-          </div>
-        </div>
-        <div class="comments-list" id="cl-${id}"></div>
-      </div>`;
-
-    if (welcome && welcome.parentNode === feed) {
-      feed.insertBefore(article, welcome);
-    } else {
-      feed.insertBefore(article, feed.firstChild);
-    }
-
-    if (typeof window.bindPostEvents === 'function') {
-      window.bindPostEvents(article);
-    }
-  });
-
-  // أزل رسالة الترحيب إن وجدت منشورات
-  const posts = feed.querySelectorAll('.post-card');
-  if (posts.length > 0 && welcome) {
-    welcome.remove();
+  let mediaHtml = "";
+  if (data.imageUrl) {
+    mediaHtml = `<img src="${data.imageUrl}" class="post-image" style="width:100%;max-height:380px;object-fit:cover;" loading="lazy" />`;
   }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § 13 — INIT الرئيسي
-// ═══════════════════════════════════════════════════════════
-async function CDZ_INIT() {
-  await new Promise(r => {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', r);
-    } else {
-      r();
-    }
-  });
-
-  await new Promise(r => setTimeout(r, 600));
-
-  if (localStorage.getItem('cdz_logged_in') !== '1') return;
-
-  const user = localStorage.getItem('cdz_user_display') || '';
-
-  // ── عرض النقاط فوراً من localStorage (بدون انتظار Firebase) ──
-  if (user) {
-    const cachedPts = parseInt(localStorage.getItem('nld_interact_pts_' + user) || '0');
-    if (cachedPts > 0) {
-      window.userInteractPts = cachedPts;
-      if (typeof updateAllPointsDisplays === 'function') updateAllPointsDisplays();
-    }
-    if (typeof updateTotalPointsBar === 'function') updateTotalPointsBar();
+  if (data.videoUrl) {
+    mediaHtml = `
+      <video src="${data.videoUrl}" class="post-video"
+        style="width:100%;max-height:380px;background:#000;"
+        controls playsinline preload="metadata">
+      </video>`;
   }
 
-  // § 2 — السن
-  fixAgeDisplay();
-
-  // § 3 — الاسم الحقيقي
-  fixRealName();
-  setTimeout(fixRealName, 1500);
-  setTimeout(fixRealName, 3000);
-
-  // § 4 — تصفير لوحة البيانات
-  resetFakeDashboardStats();
-
-  // § 5 — Firebase tables check
-  await ensureFirebaseTables();
-
-  // § 5 — استعادة المنشورات من الكاش (فوري — بدون انتظار Firebase)
-  restorePostsFromCache();
-
-  // § 5 — تحميل المنشورات من Firebase
-  await loadPostsFromFirebase();
-
-  // § 5 — ربط publishPost
-  patchPublishPostForFirebase();
-
-  // § 6 — القصص
-  await loadStoriesFromFirebase();
-  patchGostaPublish();
-
-  // § 10b — الومضات
-  await loadFlashVideosFromFirebase();
-  patchFlashVideoPublish();
-
-  // § 7 — إصلاح خروج البطولة
-  fixTournamentAutoLogout();
-
-  // § 8 — سحب للتحديث
-  initPullToRefresh();
-
-  // § 9 — إصلاح نشر القصة
-  fixStoryPublish();
-
-  // § 10 — التفاعلات
-  patchInteractionsForFirebase();
-
-  // § 11 — أعضاء حقيقيون فقط
-  fixTournamentRealMembersOnly();
-
-  // تحديث دوري كل 60 ثانية
-  setInterval(async () => {
-    await loadPostsFromFirebase();
-    await loadStoriesFromFirebase();
-    await loadFlashVideosFromFirebase();
-    fixRealName();
-    resetFakeDashboardStats();
-  }, 60000);
-}
-
-// تشغيل
-CDZ_INIT().catch(e => console.warn('[CDZ FIX]', e));
-
-// ═══════════════════════════════════════════════════════════
-// § 14 — هيكل Firebase Realtime Database (للمرجع)
-// ═══════════════════════════════════════════════════════════
-/* 
-  هيكل قاعدة بيانات Firebase:
-
-  posts/
-    {post_id}/
-      post_id, author_name, author_avatar, text, theme,
-      media_urls (array), privacy, type, created_at (timestamp)
-
-  stories/
-    {story_id}/
-      story_id, author_name, author_avatar, media_url,
-      media_type, text, theme_bg, type, expires_at, created_at
-
-  interactions/
-    {push_id}/
-      post_id, author_name, type (comment|like), content, created_at
-
-  members/
-    {uid_or_key}/
-      name, email, dob, gender, category, rank, points, photo_url
-
-  users/
-    {uid}/
-      name, email, age, dob, category, points, photo_url
-*/
-
-})(); // end CDZ_MASTER_FIX
-</script>
-
-<!-- ══════════════════════════════════════════════════════════
-     🚀 CDZ MEGA PATCH v2 — تحديثات شاملة
-     ══════════════════════════════════════════════════════════ -->
-<script>
-(function CDZ_MEGA_PATCH() {
-'use strict';
-
-// ═══════════════════════════════════════════════════════════
-// CONFIG
-// ═══════════════════════════════════════════════════════════
-const INTERACTIONS_SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vT_ulKSnfee2UfjqED0lTPiCgsXMzMiMCa1VoZBV-Jabk5WbxYaimOrh5D9FQdGbZoTBDMCV2DRjtPn/pub?gid=0&single=true&output=csv';
-const CLOUDINARY_CLOUD = 'dxnmtfhhb';
-const CLOUDINARY_PRESET = 'connectdz_unsigned';
-const DATA_REFRESH_MS = 60000; // تحديث كل دقيقة
-
-// ═══════════════════════════════════════════════════════════
-// § A — تسجيل التفاعلات في Google Sheets
-// ═══════════════════════════════════════════════════════════
-
-// رابط Apps Script للكتابة في الشيت
-// نستخدم Firebase كوسيط (الشيت للقراءة فقط عبر CSV)
-// لذا نسجل التفاعلات في Firebase ونحدث نقاط التفاعل محلياً
-
-async function logInteractionToSheet(type, points, details) {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  if (!user) return;
-
-  const ts = Date.now();
-  const entry = {
-    user,
-    type,           // like, comment, post, flash, quiz, gift_received
-    points,
-    details: details || '',
-    timestamp: ts,
-    date: new Date(ts).toLocaleDateString('ar-DZ')
-  };
-
-  // تسجيل في Firebase تحت مسار interactionLog
-  try {
-    await _fbDB.ref('interactionLog/' + user.replace(/\s/g,'_') + '/' + ts).set(entry);
-  } catch(e) {}
-
-  // تحديث إجمالي نقاط التفاعل في Firebase
-  try {
-    const ref = _fbDB.ref('userStats/' + user.replace(/\s/g,'_') + '/interactPts');
-    const snap = await ref.once('value');
-    const current = snap.val() || 0;
-    await ref.set(current + points);
-  } catch(e) {}
-
-  // تحديث محلي
-  const key = 'nld_interact_pts_' + user;
-  const local = parseInt(localStorage.getItem(key) || '0') + points;
-  localStorage.setItem(key, local);
-
-  // تحديث window.userInteractPts
-  if (typeof window.userInteractPts !== 'undefined') {
-    window.userInteractPts = (window.userInteractPts || 0) + points;
-  }
-
-  // تحديث العروض
-  if (typeof updateAllPointsDisplays === 'function') updateAllPointsDisplays();
-  if (typeof window.updateAnalyticsDashboard === 'function') window.updateAnalyticsDashboard();
-}
-
-// ═══════════════════════════════════════════════════════════
-// § B — قراءة نقاط التفاعل من Firebase وربطها بشريط الإجمالي
-// ═══════════════════════════════════════════════════════════
-
-async function loadInteractPtsFromFirebase() {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  if (!user) return;
-  try {
-    const snap = await _fbDB.ref('userStats/' + user.replace(/\s/g,'_') + '/interactPts').once('value');
-    if (snap.exists()) {
-      const pts = snap.val() || 0;
-      window.userInteractPts = pts;
-      localStorage.setItem('nld_interact_pts_' + user, pts);
-      if (typeof updateAllPointsDisplays === 'function') updateAllPointsDisplays();
-    }
-  } catch(e) {}
-}
-
-// ═══════════════════════════════════════════════════════════
-// § C — شريط إجمالي النقاط = نقاط الجدول + كويز + تفاعل
-//        (نقاط الجدول = نقاط Google Sheets + هدايا ومضة)
-// ═══════════════════════════════════════════════════════════
-
-function updateTotalPointsBar() {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  // نقاط الجدول (شيت + هدايا ومضة)
-  const sheetPts = parseInt(localStorage.getItem('cdz_user_points') || '0') || 0;
-  const giftPts  = parseInt(localStorage.getItem('cdz_flash_gift_received_' + user) || '0') || 0;
-  const totalSheetPts = sheetPts + giftPts;
-
-  // نقاط الكويز
-  let quizPts = 0;
-  try {
-    const prog = JSON.parse(localStorage.getItem('quizLevelProgress') || '{}');
-    Object.values(prog).forEach(lv => { quizPts += (lv.earnedPts || 0); });
-  } catch(e) {}
-
-  // نقاط التفاعل
-  const interactPts = parseInt(localStorage.getItem('nld_interact_pts_' + user) || '0') || 0;
-
-  const total = totalSheetPts + quizPts + interactPts;
-
-  // تحديث المتغيرات العالمية
-  if (typeof window.userSheetPts !== 'undefined') window.userSheetPts = totalSheetPts;
-  if (typeof window.userQuizPts  !== 'undefined') window.userQuizPts  = quizPts;
-  if (typeof window.userInteractPts !== 'undefined') window.userInteractPts = interactPts;
-
-  // تحديث شريط التقدم (XP Bar) بقيم حقيقية
-  const LEVEL_PTS = 20000;
-  const MAX_LVL = 99;
-  const level = Math.min(MAX_LVL, Math.floor(total / LEVEL_PTS));
-  const lvlStart = level * LEVEL_PTS;
-  const lvlEnd = (level + 1) * LEVEL_PTS;
-  const pct = Math.round(((total - lvlStart) / (lvlEnd - lvlStart)) * 100);
-
-  // XP Bar في الملف الشخصي
-  const xpFill = document.getElementById('xp-fill');
-  const xpLabel = document.querySelector('.xp-label span');
-  if (xpFill) xpFill.style.width = Math.min(100, pct) + '%';
-  if (xpLabel) xpLabel.textContent = level;
-
-  // تحديث عرض total في بطاقة الكويز
-  const ptsValEl = document.querySelector('.card-points .points-val');
-  if (ptsValEl) ptsValEl.textContent = total.toLocaleString('ar-DZ');
-  const ptsDeltaEl = document.querySelector('.card-points .points-delta');
-  if (ptsDeltaEl) ptsDeltaEl.innerHTML = `<i class="fa-solid fa-arrow-trend-up"></i> ${total.toLocaleString('ar-DZ')} إجمالي`;
-
-  // stat-val في صف الإحصاء
-  const statVals = document.querySelectorAll('.profile-stat-item .stat-val');
-  if (statVals[0]) statVals[0].textContent = total.toLocaleString('ar-DZ');
-
-  // تحديث اللوحة الرقمية إن كانت مفتوحة
-  const dboardSheet = document.getElementById('dboard-sheet-pts');
-  const dboardQuiz  = document.getElementById('dboard-quiz-pts');
-  const dboardInteract = document.getElementById('dboard-interact-pts');
-  const dboardCurrent  = document.getElementById('dboard-pts-current');
-  const dboardFill     = document.getElementById('dboard-progress-fill');
-  if (dboardSheet)   dboardSheet.textContent    = totalSheetPts.toLocaleString('ar-DZ');
-  if (dboardQuiz)    dboardQuiz.textContent      = quizPts.toLocaleString('ar-DZ');
-  if (dboardInteract)dboardInteract.textContent  = interactPts.toLocaleString('ar-DZ');
-  if (dboardCurrent) dboardCurrent.textContent   = total.toLocaleString('ar-DZ') + ' نقطة';
-  if (dboardFill)    { setTimeout(() => { dboardFill.style.width = Math.min(100,pct)+'%'; }, 100); }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § D — هدايا ومضة تُضاف كنجوم في خانة نقاط الجدول
-// ═══════════════════════════════════════════════════════════
-
-function patchFlashGiftToStars() {
-  const origSendGift = window.sendFlashGift;
-  if (typeof origSendGift !== 'function') {
-    setTimeout(patchFlashGiftToStars, 500);
-    return;
-  }
-  if (origSendGift._giftPatched) return;
-
-  window.sendFlashGift = function(emoji, pts, label) {
-    // تشغيل الدالة الأصلية
-    origSendGift.call(this, emoji, pts, label);
-
-    // نقل النقاط من مُرسل الهدية إلى مستلمها (صاحب الومضة)
-    // صاحب الومضة يستلم هذه النقاط كـ"نجوم" في خانة نقاط الجدول
-    if (window.currentFlashVideo && window.currentFlashVideo.authorName) {
-      const ownerName = window.currentFlashVideo.authorName;
-      const ownerKey = 'cdz_flash_gift_received_' + ownerName;
-      const existing = parseInt(localStorage.getItem(ownerKey) || '0') + pts;
-      localStorage.setItem(ownerKey, existing);
-
-      // إذا كان صاحب الومضة هو المستخدم الحالي، حدّث نقاطه
-      const currentUser = localStorage.getItem('cdz_user_display') || '';
-      if (ownerName === currentUser) {
-        const sheetPts = parseInt(localStorage.getItem('cdz_user_points') || '0');
-        localStorage.setItem('cdz_user_points', sheetPts + pts);
-        if (typeof window.userSheetPts !== 'undefined') window.userSheetPts = (window.userSheetPts || 0) + pts;
-        updateTotalPointsBar();
-      }
-
-      // حفظ في Firebase
-      try {
-        _fbDB.ref('userStats/' + ownerName.replace(/\s/g,'_') + '/giftPts')
-          .once('value').then(snap => {
-            const cur = snap.val() || 0;
-            _fbDB.ref('userStats/' + ownerName.replace(/\s/g,'_') + '/giftPts').set(cur + pts);
-          });
-      } catch(e) {}
-
-      // تسجيل في سجل التفاعلات
-      logInteractionToSheet('gift_sent', pts, `أرسل ${emoji} ${label} إلى ${ownerName}`);
-    }
-  };
-  window.sendFlashGift._giftPatched = true;
-}
-
-// ═══════════════════════════════════════════════════════════
-// § E — "نجوم" = نقاط الجدول + هدايا الومضة (تحديث كل النصوص)
-// ═══════════════════════════════════════════════════════════
-
-function updateStarsWord() {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  const sheetPts = parseInt(localStorage.getItem('cdz_user_points') || '0') || 0;
-  const giftPts  = parseInt(localStorage.getItem('cdz_flash_gift_received_' + user) || '0') || 0;
-  const totalStars = sheetPts + giftPts;
-
-  // كل عنصر يذكر "نجوم" أو "نقاط الجدول" يجب أن يعكس هذا المجموع
-  const starBadge = document.getElementById('star-pts-badge');
-  if (starBadge) starBadge.textContent = totalStars.toLocaleString('ar-DZ') + ' نجمة';
-
-  const starTotal = document.getElementById('star-pts-total');
-  if (starTotal) starTotal.textContent = totalStars.toLocaleString('ar-DZ');
-
-  const bankPtsDisp = document.getElementById('bank-pts-display');
-  if (bankPtsDisp) bankPtsDisp.textContent = totalStars.toLocaleString('ar-DZ') + ' نجمة';
-
-  const cardStarRow = document.getElementById('card-star-pts-row');
-  if (cardStarRow) cardStarRow.textContent = `${totalStars.toLocaleString('ar-DZ')} نجمة (1 نجمة = 0.6 دج)`;
-
-  // اللوحة الرقمية - نقاط الجدول
-  const dboardSheet = document.getElementById('dboard-sheet-pts');
-  if (dboardSheet) dboardSheet.textContent = totalStars.toLocaleString('ar-DZ');
-}
-
-// ═══════════════════════════════════════════════════════════
-// § F — تسريع جلب وعرض البيانات (Promise.all + cache)
-// ═══════════════════════════════════════════════════════════
-
-// تحميل أعضاء سريع مع كاش
-let _membersCache = null;
-let _membersCacheTs = 0;
-const MEMBERS_CACHE_TTL = 120000; // دقيقتان
-
-async function fastLoadMembers() {
-  const now = Date.now();
-  if (_membersCache && now - _membersCacheTs < MEMBERS_CACHE_TTL) {
-    return _membersCache;
-  }
-  try {
-    const snap = await _fbDB.ref('members').once('value');
-    if (snap.exists()) {
-      _membersCache = Object.values(snap.val()).filter(m => m && m.name);
-      _membersCacheTs = now;
-      window.MEMBERS_CACHE = _membersCache;
-      return _membersCache;
-    }
-  } catch(e) {}
-  return window.allMembers || [];
-}
-
-// تسريع تحميل الملف الشخصي بالتوازي
-async function fastLoadProfileData() {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  if (!user) return;
-
-  try {
-    const [interactSnap, statsSnap] = await Promise.all([
-      _fbDB.ref('userStats/' + user.replace(/\s/g,'_') + '/interactPts').once('value'),
-      _fbDB.ref('userStats/' + user.replace(/\s/g,'_')).once('value')
-    ]);
-
-    if (interactSnap.exists()) {
-      window.userInteractPts = interactSnap.val() || 0;
-      localStorage.setItem('nld_interact_pts_' + user, window.userInteractPts);
-    }
-
-    if (statsSnap.exists()) {
-      const stats = statsSnap.val();
-      if (stats.giftPts) {
-        localStorage.setItem('cdz_flash_gift_received_' + user, stats.giftPts);
-      }
-    }
-
-    updateTotalPointsBar();
-    updateStarsWord();
-  } catch(e) {}
-}
-
-// ═══════════════════════════════════════════════════════════
-// § G — تغيير صورة الملف الشخصي وصورة الغلاف:
-//        تحديث في كل مكان + حفظ في Firebase + Cloudinary
-// ═══════════════════════════════════════════════════════════
-
-async function uploadImageToCloudinary(dataUrl) {
-  try {
-    const fd = new FormData();
-    fd.append('file', dataUrl);
-    fd.append('upload_preset', CLOUDINARY_PRESET);
-    const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/upload`, {
-      method: 'POST', body: fd
-    });
-    if (!r.ok) return null;
-    const d = await r.json();
-    return d.secure_url || null;
-  } catch(e) { return null; }
-}
-
-async function saveAvatarEverywhere(dataUrl) {
-  const user = localStorage.getItem('cdz_user_display') || '';
-
-  // تحديث فوري في كل العناصر
-  document.querySelectorAll('#profile-pic, .user-avatar, #composer-avatar, #member-card-mini-img, .card-bank .mini-avatar, #wheel-profile-avatar, #wcb-avatar').forEach(el => {
-    if (el) el.src = dataUrl;
-  });
-
-  // تحديث localStorage مؤقت
-  localStorage.setItem('cdz_user_photo', dataUrl);
-
-  // رفع Cloudinary في الخلفية
-  const cloudUrl = await uploadImageToCloudinary(dataUrl);
-  if (cloudUrl) {
-    localStorage.setItem('cdz_user_photo', cloudUrl);
-    localStorage.setItem('cdz_user_photo_cloud', cloudUrl);
-
-    // تحديث في Firebase
-    if (user) {
-      try {
-        await _fbDB.ref('userProfiles/' + user.replace(/\s/g,'_') + '/avatar').set(cloudUrl);
-        // أيضاً في members
-        const snap = await _fbDB.ref('members').orderByChild('name').equalTo(user).once('value');
-        if (snap.exists()) {
-          const key = Object.keys(snap.val())[0];
-          await _fbDB.ref('members/' + key + '/photo_url').set(cloudUrl);
-        }
-      } catch(e) {}
-    }
-
-    // تحديث العناصر بالرابط الدائم
-    document.querySelectorAll('#profile-pic, .user-avatar, #composer-avatar').forEach(el => {
-      if (el) el.src = cloudUrl;
-    });
-  }
-
-  if (typeof showToast === 'function') showToast('✅ تم تغيير الصورة وحفظها!', 'correct');
-}
-
-async function saveCoverEverywhere(dataUrl) {
-  const user = localStorage.getItem('cdz_user_display') || '';
-
-  // تحديث فوري
-  const coverImg = document.querySelector('.profile-cover-wrap img.cover-img');
-  if (coverImg) coverImg.src = dataUrl;
-  localStorage.setItem('cdz_cover_photo', dataUrl);
-
-  // رفع Cloudinary في الخلفية
-  const cloudUrl = await uploadImageToCloudinary(dataUrl);
-  if (cloudUrl) {
-    localStorage.setItem('cdz_cover_photo', cloudUrl);
-    localStorage.setItem('cdz_cover_photo_cloud', cloudUrl);
-
-    if (user) {
-      try {
-        await _fbDB.ref('userProfiles/' + user.replace(/\s/g,'_') + '/cover').set(cloudUrl);
-      } catch(e) {}
-    }
-
-    if (coverImg) coverImg.src = cloudUrl;
-  }
-
-  if (typeof showToast === 'function') showToast('✅ تم تغيير صورة الغلاف وحفظها!', 'correct');
-}
-
-function patchAvatarUpload() {
-  const avatarUpload = document.getElementById('avatar-upload');
-  if (avatarUpload && !avatarUpload._megaPatched) {
-    avatarUpload._megaPatched = true;
-    avatarUpload.addEventListener('change', function() {
-      const file = this.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        saveAvatarEverywhere(e.target.result);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  const coverUpload = document.getElementById('cover-upload');
-  if (coverUpload && !coverUpload._megaPatched) {
-    coverUpload._megaPatched = true;
-    coverUpload.addEventListener('change', function() {
-      const file = this.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        saveCoverEverywhere(e.target.result);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-}
-
-// استعادة الصور المحفوظة عند بدء التشغيل
-function restoreSavedImages() {
-  const avatar = localStorage.getItem('cdz_user_photo_cloud') || localStorage.getItem('cdz_user_photo');
-  const cover  = localStorage.getItem('cdz_cover_photo_cloud') || localStorage.getItem('cdz_cover_photo');
-
-  if (avatar) {
-    document.querySelectorAll('#profile-pic, .user-avatar, #composer-avatar, #wheel-profile-avatar').forEach(el => {
-      if (el && el.src && (el.src.includes('pravatar') || el.src.includes('dicebear') || el.src.includes('ui-avatars'))) {
-        el.src = avatar;
-      }
-    });
-  }
-
-  if (cover) {
-    const coverImg = document.querySelector('.profile-cover-wrap img.cover-img');
-    if (coverImg) coverImg.src = cover;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § H — شريط التقدم بقيم حقيقية (XP Bar)
-// ═══════════════════════════════════════════════════════════
-function fixProgressBar() {
-  updateTotalPointsBar();
-  // استعادة الصورة المحفوظة في بيانات XP
-  const xpLevelName = document.querySelector('.xp-label');
-  if (xpLevelName) {
-    const user = localStorage.getItem('cdz_user_display') || '';
-    const sheetPts = parseInt(localStorage.getItem('cdz_user_points') || '0') || 0;
-    const interactPts = parseInt(localStorage.getItem('nld_interact_pts_' + user) || '0') || 0;
-    let quizPts = 0;
-    try {
-      const prog = JSON.parse(localStorage.getItem('quizLevelProgress') || '{}');
-      Object.values(prog).forEach(lv => { quizPts += (lv.earnedPts || 0); });
-    } catch(e) {}
-    const total = sheetPts + quizPts + interactPts;
-    const LEVEL_PTS = 20000;
-    const level = Math.min(99, Math.floor(total / LEVEL_PTS));
-    const lvlEnd = (level + 1) * LEVEL_PTS;
-    const pct = Math.round(((total - level * LEVEL_PTS) / LEVEL_PTS) * 100);
-    const fill = document.getElementById('xp-fill');
-    if (fill) fill.style.width = Math.min(100, pct) + '%';
-    xpLevelName.innerHTML = `المستوى <span style="color:var(--primary)">${level}</span>`;
-    // إضافة tooltip
-    xpLevelName.title = `${total.toLocaleString('ar-DZ')} / ${lvlEnd.toLocaleString('ar-DZ')} نقطة`;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// § I — لوحة بيانات التفاعل: تصفير وحساب حقيقي
-// ═══════════════════════════════════════════════════════════
-
-function initRealAnalyticsDashboard() {
-  // تتبع نشاطات التفاعل الحقيقية
-  const _analyticsData = {
-    posts: 0,
-    likes: 0,
-    comments: 0,
-    shares: 0,
-    stories: 0,
-    flashes: 0,
-    gifts_sent: 0,
-    gifts_received: 0
-  };
-
-  // قراءة من localStorage
-  const user = localStorage.getItem('cdz_user_display') || '';
-  const saved = JSON.parse(localStorage.getItem('cdz_analytics_' + user) || '{}');
-  Object.assign(_analyticsData, saved);
-
-  function saveAnalytics() {
-    localStorage.setItem('cdz_analytics_' + user, JSON.stringify(_analyticsData));
-    // تحديث العرض
-    renderAnalyticsDashboard(_analyticsData);
-  }
-
-  function renderAnalyticsDashboard(data) {
-    const stats = document.querySelectorAll('.analytics-stat .a-val');
-    const feed = document.getElementById('feed-section');
-    const posts = feed ? feed.querySelectorAll('.post-card') : [];
-    let realLikes = 0, realComments = 0, realViews = 0;
-    posts.forEach(post => {
-      realLikes    += parseInt(post.querySelector('[id^="react-count-"]')?.textContent || '0');
-      realComments += parseInt(post.querySelector('[id^="cc-"]')?.textContent || '0');
-      realViews    += parseInt(post.querySelector('.views-count')?.textContent || '0');
-    });
-    if (stats[0]) stats[0].textContent = realViews  > 1000 ? (realViews/1000).toFixed(1)+'K' : (realViews || data.posts || '0');
-    if (stats[1]) stats[1].textContent = realComments || data.comments || '0';
-    if (stats[2]) stats[2].textContent = realLikes   || data.likes    || '0';
-    if (stats[3]) stats[3].textContent = data.shares || '0';
-  }
-
-  // تطوير updateAnalyticsDashboard ليعمل بشكل حقيقي
-  window.updateAnalyticsDashboard = function() {
-    renderAnalyticsDashboard(_analyticsData);
-  };
-
-  // اعتراض التفاعلات لتحديث العداد
-  const _origPublish = window.publishPost;
-  if (typeof _origPublish === 'function' && !_origPublish._analyticsPatched) {
-    window.publishPost = function() {
-      _origPublish.apply(this, arguments);
-      _analyticsData.posts++;
-      saveAnalytics();
-    };
-    window.publishPost._analyticsPatched = true;
-  }
-
-  const _origLike = window.quickLike;
-  if (typeof _origLike === 'function' && !_origLike._analyticsPatched) {
-    window.quickLike = function(postId) {
-      _origLike.call(this, postId);
-      const btn = document.getElementById('like-btn-' + postId);
-      if (btn && btn.classList.contains('liked-green')) {
-        _analyticsData.likes++;
-        saveAnalytics();
-        // تسجيل التفاعل + النقاط
-        logInteractionToSheet('like', 2, 'إعجاب بمنشور ' + postId);
-      }
-    };
-    window.quickLike._analyticsPatched = true;
-  }
-
-  const _origComment = window.submitComment;
-  if (typeof _origComment === 'function' && !_origComment._analyticsPatched) {
-    window.submitComment = function(postId) {
-      const inp = document.getElementById('ci-' + postId);
-      const text = inp ? inp.value.trim() : '';
-      _origComment.call(this, postId);
-      if (text) {
-        _analyticsData.comments++;
-        saveAnalytics();
-        logInteractionToSheet('comment', 3, 'تعليق على منشور ' + postId);
-      }
-    };
-    window.submitComment._analyticsPatched = true;
-  }
-
-  // تحديث فوري
-  renderAnalyticsDashboard(_analyticsData);
-}
-
-// ═══════════════════════════════════════════════════════════
-// § J — ملف شخص آخر: زر صداقة + مراسلة + إحصائيات حقيقية
-// ═══════════════════════════════════════════════════════════
-
-// بيانات الأصدقاء
-function getFriendsList() {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  try { return JSON.parse(localStorage.getItem('cdz_friends_' + user) || '[]'); } catch(e) { return []; }
-}
-function saveFriendsList(list) {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  localStorage.setItem('cdz_friends_' + user, JSON.stringify(list));
-  updateFriendsCountDisplay();
-}
-function updateFriendsCountDisplay() {
-  const friends = getFriendsList();
-  // تحديث عداد الأصدقاء في الملف الشخصي
-  document.querySelectorAll('[id^="profile-friends-count"], .profile-friends-count').forEach(el => {
-    el.textContent = friends.length;
-  });
-  // stat item
-  const statItems = document.querySelectorAll('.profile-stat-item');
-  statItems.forEach(item => {
-    const lbl = item.querySelector('.stat-lbl');
-    if (lbl && lbl.textContent.includes('صديق')) {
-      const val = item.querySelector('.stat-val');
-      if (val) val.textContent = friends.length;
-    }
-  });
-}
-
-// فتح ملف شخصي لمستخدم آخر
-window.openFriendProfile = function(memberData) {
-  const currentUser = localStorage.getItem('cdz_user_display') || '';
-  const targetName = memberData.name || '';
-  if (!targetName || targetName === currentUser) {
-    if (typeof navigateTo === 'function') navigateTo('profile');
-    return;
-  }
-
-  const friends = getFriendsList();
-  const isFriend = friends.includes(targetName);
-  const avatarSrc = memberData.photo || memberData.avatar ||
-    `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(targetName)}`;
-
-  // جلب عدد منشورات الهدف من Firebase
-  let postCount = 0;
-  _fbDB.ref('posts').orderByChild('author_name').equalTo(targetName).once('value').then(snap => {
-    if (snap.exists()) postCount = Object.keys(snap.val()).length;
-    buildFriendProfileModal(targetName, avatarSrc, isFriend, postCount, memberData);
-  }).catch(() => {
-    buildFriendProfileModal(targetName, avatarSrc, isFriend, postCount, memberData);
-  });
-};
-
-function buildFriendProfileModal(name, avatar, isFriend, postCount, memberData) {
-  document.getElementById('friend-profile-modal')?.remove();
-
-  const friends = getFriendsList();
-  const friendsCount = friends.length;
-  const pts = memberData.pts || memberData.points || 0;
-
-  // معلوماتي section
-  const profileInfo = JSON.parse(localStorage.getItem('cdz_profile_info_' + name) || '{}');
-  const infoRows = [];
-  if (profileInfo.wilaya) infoRows.push(`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-family:var(--font-main);font-size:.82rem"><i class="fa-solid fa-map" style="color:var(--primary);width:18px;text-align:center"></i><span style="color:var(--text-muted)">الولاية:</span><span style="flex:1;text-align:right">${profileInfo.wilaya}</span></div>`);
-  if (profileInfo.education) infoRows.push(`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-family:var(--font-main);font-size:.82rem"><i class="fa-solid fa-graduation-cap" style="color:var(--primary);width:18px;text-align:center"></i><span style="color:var(--text-muted)">المستوى:</span><span style="flex:1;text-align:right">${profileInfo.education}</span></div>`);
-  if (memberData.category || memberData.cat) infoRows.push(`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-family:var(--font-main);font-size:.82rem"><i class="fa-solid fa-tag" style="color:var(--primary);width:18px;text-align:center"></i><span style="color:var(--text-muted)">الفئة:</span><span style="flex:1;text-align:right">${memberData.category || memberData.cat}</span></div>`);
-
-  const modal = document.createElement('div');
-  modal.id = 'friend-profile-modal';
-  modal.style.cssText = 'position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center';
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:430px;max-height:88vh;overflow-y:auto;animation:slideUp .3s cubic-bezier(.4,0,.2,1);padding-bottom:32px">
-      <!-- Header Cover -->
-      <div style="height:110px;background:linear-gradient(135deg,#1a6dff,#7c3aed);position:relative;border-radius:24px 24px 0 0;overflow:hidden">
-        <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,.1)"></div>
-        <button onclick="document.getElementById('friend-profile-modal').remove()" style="position:absolute;top:12px;left:12px;background:rgba(0,0,0,.35);border:none;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.9rem"><i class="fa-solid fa-xmark"></i></button>
-      </div>
-      <!-- Avatar -->
-      <div style="display:flex;justify-content:center;margin-top:-44px;position:relative;z-index:2">
-        <div style="position:relative">
-          <img src="${avatar}" style="width:88px;height:88px;border-radius:50%;border:4px solid #fff;object-fit:cover;box-shadow:0 4px 20px rgba(0,0,0,.2)"
-            onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(name)}'" />
-          <div style="position:absolute;bottom:4px;right:4px;width:14px;height:14px;background:#00c853;border-radius:50%;border:2px solid #fff"></div>
+  const likesCount    = (data.likes   || []).length;
+  const commentsCount = data.commentsCount || 0;
+  const myUid         = window._cdz_uid || "";
+  const iLiked        = (data.likes   || []).includes(myUid);
+
+  const article = document.createElement("article");
+  article.className = "post-card";
+  article.dataset.fsid = id;
+  article.style.animation = "fadeUp .4s ease both";
+  article.innerHTML = `
+    <div class="post-header">
+      <img src="${avatarSrc}" class="avatar" onerror="this.src='https://ui-avatars.com/api/?name=?&background=1a6dff&color=fff&size=80'" />
+      <div class="post-meta">
+        <div class="post-author">${escHtml(authorName)}</div>
+        <div class="post-info">
+          <span>${timeStr}</span>
+          <span>·</span>
+          <i class="fa-solid fa-earth-africa fa-xs"></i>
         </div>
       </div>
-      <!-- Name & Stats -->
-      <div style="text-align:center;padding:10px 16px 0">
-        <div style="font-family:var(--font-main);font-size:1.2rem;font-weight:900;color:var(--text-main)">${name}</div>
-        <div style="font-size:.8rem;color:var(--text-muted);font-family:var(--font-main);margin-top:2px">عضو نشط · Next Leaders DZ 🇩🇿</div>
+      <button class="more-btn"><i class="fa-solid fa-ellipsis"></i></button>
+    </div>
+    ${data.text ? `<p class="post-text">${escHtml(data.text)}</p>` : ""}
+    ${mediaHtml}
+    <div class="post-stats">
+      <div class="reactions">
+        <span class="reaction-emojis" id="pfs-emojis-${id}">
+          ${likesCount > 0 ? '<span>👍</span>' : ''}
+        </span>
+        <span id="pfs-likes-${id}">${likesCount > 0 ? likesCount : ''}</span>
       </div>
-      <!-- Stats Row -->
-      <div style="display:flex;justify-content:center;gap:0;margin:14px 16px 0;background:var(--bg);border-radius:14px;overflow:hidden;border:1px solid var(--border)">
-        <div style="flex:1;text-align:center;padding:12px 8px;border-left:1px solid var(--border)">
-          <div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:var(--text-main)">${postCount}</div>
-          <div style="font-size:.68rem;color:var(--text-muted);font-family:var(--font-main)">منشور</div>
-        </div>
-        <div style="flex:1;text-align:center;padding:12px 8px;border-left:1px solid var(--border)">
-          <div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:var(--text-main)">${friendsCount}</div>
-          <div style="font-size:.68rem;color:var(--text-muted);font-family:var(--font-main)">صديق</div>
-        </div>
-        <div style="flex:1;text-align:center;padding:12px 8px">
-          <div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:#f59e0b">${pts.toLocaleString('ar-DZ')}</div>
-          <div style="font-size:.68rem;color:var(--text-muted);font-family:var(--font-main)">نقطة</div>
-        </div>
-      </div>
-      <!-- Action Buttons -->
-      <div style="display:flex;gap:10px;padding:14px 16px 0">
-        <button id="fpm-friend-btn" onclick="toggleFriendship('${name}', this)"
-          style="flex:1;padding:11px;border-radius:10px;border:none;font-family:var(--font-main);font-size:.88rem;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .2s;
-          background:${isFriend ? '#f0fdf4' : 'linear-gradient(135deg,var(--primary),var(--primary-dark))'};
-          color:${isFriend ? '#16a34a' : '#fff'};
-          border:${isFriend ? '1.5px solid #86efac' : 'none'}">
-          <i class="fa-solid ${isFriend ? 'fa-user-check' : 'fa-user-plus'}"></i>
-          ${isFriend ? 'صديق ✓' : 'إضافة صديق'}
-        </button>
-        <button onclick="openMessageWithFriend('${name}')"
-          style="flex:1;padding:11px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-family:var(--font-main);font-size:.88rem;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;color:var(--text-main);transition:all .2s">
-          <i class="fa-regular fa-comment-dots" style="color:var(--primary)"></i>
-          مراسلة
-        </button>
-      </div>
-      <!-- تعرف عليّ (معلومات) -->
-      ${infoRows.length ? `
-      <div style="margin:14px 16px 0;background:var(--bg);border-radius:12px;padding:12px 14px">
-        <div style="font-family:var(--font-main);font-size:.82rem;font-weight:800;color:var(--text-main);margin-bottom:8px;display:flex;align-items:center;gap:6px">
-          <i class="fa-solid fa-circle-info" style="color:var(--primary)"></i> تعرف عليّ
-        </div>
-        ${infoRows.join('')}
-      </div>` : ''}
+      <span id="pfs-cmts-${id}">${commentsCount > 0 ? commentsCount + ' تعليق' : ''}</span>
+    </div>
+    <div class="post-actions">
+      <button class="reaction-btn ${iLiked ? 'liked' : ''}" onclick="fsToggleLike('${id}',this)">
+        <i class="fa-${iLiked ? 'solid' : 'regular'} fa-thumbs-up"></i> إعجاب
+      </button>
+      <button class="reaction-btn" onclick="fsOpenComments('${id}')">
+        <i class="fa-regular fa-comment"></i> تعليق
+      </button>
+      <button class="reaction-btn" onclick="fsSharePost('${id}')">
+        <i class="fa-solid fa-share-nodes"></i> مشاركة
+      </button>
     </div>`;
 
-  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-  document.body.appendChild(modal);
+  // أضف في البداية (أحدث أولاً)
+  // لكن بعد رسالة الترحيب إن وجدت
+  const welcome = document.getElementById("feed-welcome-msg");
+  if (welcome) welcome.remove();
+
+  feed.insertBefore(article, feed.firstChild);
 }
 
-window.toggleFriendship = function(name, btn) {
-  const friends = getFriendsList();
-  const isFriend = friends.includes(name);
-  if (isFriend) {
-    const idx = friends.indexOf(name);
-    friends.splice(idx, 1);
-    if (btn) {
-      btn.innerHTML = '<i class="fa-solid fa-user-plus"></i> إضافة صديق';
-      btn.style.background = 'linear-gradient(135deg,var(--primary),var(--primary-dark))';
-      btn.style.color = '#fff';
-      btn.style.border = 'none';
-    }
-    if (typeof showToast === 'function') showToast('تم إلغاء الصداقة مع ' + name);
-  } else {
-    friends.push(name);
-    if (btn) {
-      btn.innerHTML = '<i class="fa-solid fa-user-check"></i> صديق ✓';
-      btn.style.background = '#f0fdf4';
-      btn.style.color = '#16a34a';
-      btn.style.border = '1.5px solid #86efac';
-    }
-    if (typeof showToast === 'function') showToast('✅ أُضيف ' + name + ' إلى أصدقائك!', 'correct');
-    // تسجيل تفاعل
-    logInteractionToSheet('friend_add', 5, 'إضافة صديق: ' + name);
-  }
-  saveFriendsList(friends);
+function updatePostStats(id, data) {
+  const likesCount = (data.likes || []).length;
+  const myUid = window._cdz_uid || "";
+  const iLiked = (data.likes || []).includes(myUid);
 
-  // حفظ في Firebase
-  const user = localStorage.getItem('cdz_user_display') || '';
+  const likesEl = document.getElementById(`pfs-likes-${id}`);
+  if (likesEl) likesEl.textContent = likesCount > 0 ? likesCount : "";
+
+  const btn = document.querySelector(`[data-fsid="${id}"] .reaction-btn`);
+  if (btn) {
+    btn.className = `reaction-btn ${iLiked ? "liked" : ""}`;
+    btn.querySelector("i").className = `fa-${iLiked ? "solid" : "regular"} fa-thumbs-up`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LIKE / UNLIKE
+// ═══════════════════════════════════════════════════════════════
+window.fsToggleLike = async function(postId, btn) {
+  const uid = window._cdz_uid;
+  if (!uid) return;
+
+  const ref   = doc(db, "posts", postId);
+  const snap  = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const likes = snap.data().likes || [];
+  const iLiked = likes.includes(uid);
+
+  await updateDoc(ref, {
+    likes: iLiked ? arrayRemove(uid) : arrayUnion(uid)
+  });
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  COMMENTS
+// ═══════════════════════════════════════════════════════════════
+window.fsOpenComments = async function(postId) {
+  // إنشاء نافذة التعليقات
+  let overlay = document.getElementById("fs-comments-overlay");
+  if (overlay) overlay.remove();
+
+  overlay = document.createElement("div");
+  overlay.id = "fs-comments-overlay";
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:9500;
+    background:rgba(0,0,0,.6);backdrop-filter:blur(4px);
+    display:flex;align-items:flex-end;justify-content:center;`;
+
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:430px;max-height:80vh;display:flex;flex-direction:column;animation:slideUp .3s ease">
+      <div style="padding:14px 16px;border-bottom:1px solid #e4e6eb;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-family:var(--font-main);font-weight:900;font-size:1rem">التعليقات</span>
+        <button onclick="document.getElementById('fs-comments-overlay').remove()"
+          style="background:#f0f2f5;border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div id="fs-cmts-list" style="flex:1;overflow-y:auto;padding:12px 16px;min-height:120px;"></div>
+      <div style="padding:10px 14px;border-top:1px solid #e4e6eb;display:flex;gap:8px;align-items:center">
+        <img src="${document.querySelector('#profile-pic')?.src||''}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;" />
+        <input id="fs-cmt-input" type="text" placeholder="اكتب تعليقاً..."
+          style="flex:1;border:none;background:#f0f2f5;border-radius:999px;padding:9px 14px;font-family:var(--font-body);font-size:.88rem;outline:none;"
+          onkeydown="if(event.key==='Enter')fsSendComment('${postId}')" />
+        <button onclick="fsSendComment('${postId}')"
+          style="background:var(--primary);color:#fff;border:none;border-radius:50%;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+          <i class="fa-solid fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>`;
+
+  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  // جلب التعليقات
   try {
-    _fbDB.ref('friends/' + user.replace(/\s/g,'_')).set(friends);
-  } catch(e) {}
-};
+    const cmtQuery = query(
+      collection(db, "posts", postId, "comments"),
+      orderBy("createdAt", "asc")
+    );
+    const cmtSnap = await getDocs(cmtQuery);
+    const list    = document.getElementById("fs-cmts-list");
+    if (!list) return;
 
-window.openMessageWithFriend = function(name) {
-  document.getElementById('friend-profile-modal')?.remove();
-  // فتح الماسنجر مع هذا الشخص
-  if (typeof navigateTo === 'function') navigateTo('messenger');
-  setTimeout(() => {
-    const convItems = document.querySelectorAll('.msg-conv-item, .msg-conv-name');
-    convItems.forEach(item => {
-      const n = item.querySelector('.msg-conv-name')?.textContent || item.textContent;
-      if (n.includes(name)) item.click?.();
-    });
-    if (typeof showToast === 'function') showToast('💬 ابدأ محادثة مع ' + name);
-  }, 400);
-};
-
-// ربط openFriendProfile مع صفحة الأعضاء
-function patchMembersPageForFriendProfile() {
-  const origInitMembers = window.initMembersPage;
-  if (typeof origInitMembers !== 'function') {
-    setTimeout(patchMembersPageForFriendProfile, 800);
-    return;
-  }
-  if (origInitMembers._friendPatched) return;
-  origInitMembers._friendPatched = true;
-
-  window.initMembersPage = function() {
-    origInitMembers.call(this);
-    // بعد تحميل الأعضاء، إضافة click handler لكل بطاقة
-    setTimeout(() => {
-      document.querySelectorAll('.member-card, .member-item').forEach(card => {
-        if (card._friendBound) return;
-        card._friendBound = true;
-        card.addEventListener('click', function(e) {
-          if (e.target.closest('button')) return;
-          const name = card.querySelector('[class*="name"]')?.textContent?.trim() || '';
-          const photo = card.querySelector('img')?.src || '';
-          const pts = parseInt(card.querySelector('[class*="pts"]')?.textContent || '0');
-          if (name) window.openFriendProfile({ name, photo, pts });
-        });
+    if (cmtSnap.empty) {
+      list.innerHTML = `<div style="text-align:center;padding:24px;color:#65676b;font-family:var(--font-main);font-size:.85rem;">لا توجد تعليقات بعد. كن أول من يعلّق!</div>`;
+    } else {
+      cmtSnap.forEach(c => {
+        const d = c.data();
+        const cmtEl = document.createElement("div");
+        cmtEl.style.cssText = "display:flex;gap:8px;margin-bottom:12px;align-items:flex-start";
+        const av = d.authorPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(d.authorName||"?")}&background=1a6dff&color=fff&size=40`;
+        cmtEl.innerHTML = `
+          <img src="${av}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
+          <div style="background:#f0f2f5;border-radius:14px;padding:8px 12px;flex:1;">
+            <div style="font-family:var(--font-main);font-size:.78rem;font-weight:800;color:#1c1e21;margin-bottom:2px">${escHtml(d.authorName||"عضو")}</div>
+            <div style="font-size:.85rem;color:#1c1e21;">${escHtml(d.text||"")}</div>
+            <div style="font-size:.65rem;color:#65676b;margin-top:4px;">${d.createdAt?.toDate ? formatTime(d.createdAt.toDate()) : "الآن"}</div>
+          </div>`;
+        list.appendChild(cmtEl);
       });
-    }, 1000);
-  };
-}
+    }
+  } catch(e) { console.warn("Comments:", e); }
+};
 
-// ═══════════════════════════════════════════════════════════
-// § K — تحديث عدد المنشورات الحقيقي في الملف الشخصي
-// ═══════════════════════════════════════════════════════════
-async function updateRealPostsCount() {
-  const user = localStorage.getItem('cdz_user_display') || '';
-  if (!user) return;
+window.fsSendComment = async function(postId) {
+  const inp = document.getElementById("fs-cmt-input");
+  if (!inp) return;
+  const text = inp.value.trim();
+  if (!text) return;
 
-  let count = 0;
-  // عد المنشورات في الفيد
-  const feed = document.getElementById('feed-section');
-  if (feed) {
-    feed.querySelectorAll('.post-card').forEach(post => {
-      const author = post.querySelector('.post-author')?.textContent?.trim() || '';
-      if (author === user) count++;
-    });
-  }
+  const uid  = window._cdz_uid;
+  const name = localStorage.getItem("cdz_user_display") || "عضو";
+  const photo= localStorage.getItem("cdz_user_photo")   || "";
 
-  // عد إضافي من Firebase
+  inp.value = "";
+  inp.disabled = true;
+
   try {
-    const snap = await _fbDB.ref('posts').orderByChild('author_name').equalTo(user).once('value');
-    if (snap.exists()) count = Math.max(count, Object.keys(snap.val()).length);
-  } catch(e) {}
+    await addDoc(collection(db, "posts", postId, "comments"), {
+      text, uid, authorName: name, authorPhoto: photo,
+      createdAt: serverTimestamp()
+    });
+    // تحديث عداد التعليقات
+    await updateDoc(doc(db, "posts", postId), {
+      commentsCount: increment(1)
+    });
 
-  // تحديث العرض
-  document.querySelectorAll('.profile-stat-item').forEach(item => {
-    const lbl = item.querySelector('.stat-lbl');
-    if (lbl && (lbl.textContent.includes('منشور') || lbl.textContent.includes('post'))) {
-      const val = item.querySelector('.stat-val');
-      if (val) val.textContent = count;
+    // أضف التعليق في الواجهة محلياً
+    const list = document.getElementById("fs-cmts-list");
+    if (list) {
+      const empty = list.querySelector("div[style*='text-align:center']");
+      if (empty) empty.remove();
+      const av = photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1a6dff&color=fff&size=40`;
+      const cmtEl = document.createElement("div");
+      cmtEl.style.cssText = "display:flex;gap:8px;margin-bottom:12px;align-items:flex-start";
+      cmtEl.innerHTML = `
+        <img src="${av}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
+        <div style="background:#f0f2f5;border-radius:14px;padding:8px 12px;flex:1;">
+          <div style="font-family:var(--font-main);font-size:.78rem;font-weight:800;color:#1c1e21;margin-bottom:2px">${escHtml(name)}</div>
+          <div style="font-size:.85rem;color:#1c1e21;">${escHtml(text)}</div>
+          <div style="font-size:.65rem;color:#65676b;margin-top:4px;">الآن</div>
+        </div>`;
+      list.appendChild(cmtEl);
+      list.scrollTop = list.scrollHeight;
     }
-  });
-}
-
-// ═══════════════════════════════════════════════════════════
-// § L — تحديث كل دقيقة
-// ═══════════════════════════════════════════════════════════
-function startPeriodicRefresh() {
-  setInterval(async () => {
-    await fastLoadProfileData();
-    updateTotalPointsBar();
-    updateStarsWord();
-    updateFriendsCountDisplay();
-    updateRealPostsCount();
-    if (typeof updateAllPointsDisplays === 'function') updateAllPointsDisplays();
-    if (typeof window.updateAnalyticsDashboard === 'function') window.updateAnalyticsDashboard();
-  }, DATA_REFRESH_MS);
-}
-
-// ═══════════════════════════════════════════════════════════
-// § M — اعتراض كل التفاعلات لتسجيلها في Google Sheets (عبر Firebase)
-// ═══════════════════════════════════════════════════════════
-function patchAllInteractionsForSheet() {
-  // نشر منشور
-  const origPublish = window.publishPost;
-  if (typeof origPublish === 'function' && !origPublish._sheetLogged) {
-    window.publishPost = function() {
-      origPublish.apply(this, arguments);
-      logInteractionToSheet('post', 10, 'نشر منشور جديد');
-    };
-    window.publishPost._sheetLogged = true;
+  } catch(e) { console.warn("Send comment:", e); } finally {
+    inp.disabled = false;
+    inp.focus();
   }
+};
 
-  // إعجاب
-  const origLike = window.quickLike;
-  if (typeof origLike === 'function' && !origLike._sheetLogged) {
-    window.quickLike = function(postId) {
-      origLike.call(this, postId);
-      const btn = document.getElementById('like-btn-' + postId);
-      if (btn) {
-        const isLiked = btn.dataset.reaction || btn.classList.contains('liked-green');
-        if (isLiked) logInteractionToSheet('like', 2, 'إعجاب');
+window.fsSharePost = function(postId) {
+  const url = `${location.origin}${location.pathname}#post-${postId}`;
+  if (navigator.share) {
+    navigator.share({ title: "SMRT KIDS LAP", url }).catch(()=>{});
+  } else {
+    navigator.clipboard?.writeText(url);
+    showToast("تم نسخ رابط المنشور ✅");
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  PUBLISH POST → FIRESTORE + CLOUDINARY
+//  يُستبدَل publishPost الأصلي بهذا الإصدار المتكامل
+// ═══════════════════════════════════════════════════════════════
+const _origPublishPost = window.publishPost;
+
+window.publishPost = async function() {
+  const textarea = document.getElementById("composer-textarea");
+  const text     = textarea?.value?.trim() || "";
+  const uid      = window._cdz_uid;
+  const name     = localStorage.getItem("cdz_user_display") || "عضو";
+  const photo    = localStorage.getItem("cdz_user_photo")   || "";
+  const cat      = localStorage.getItem("cdz_user_cat")     || "";
+
+  // بيانات الملفات الوسائطية من المحرر الأصلي
+  const mediaFiles = window.composerMediaFiles || [];
+  const imgs = mediaFiles.filter(f => f.type === "image");
+  const vids = mediaFiles.filter(f => f.type === "video");
+
+  if (!text && !imgs.length && !vids.length) return;
+
+  // ── أظهر مؤشر التحميل ──
+  const pubBtn = document.getElementById("composer-publish-btn") ||
+                 document.getElementById("composer-publish-btn-bottom");
+  if (pubBtn) { pubBtn.disabled = true; pubBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جارٍ النشر...'; }
+
+  try {
+    let imageUrl = "";
+    let videoUrl = "";
+    let publicId = "";
+
+    // ── رفع الوسائط إلى Cloudinary ──
+    if (imgs.length > 0 && imgs[0].file) {
+      try {
+        const res = await window.cdnUpload(imgs[0].file, "posts/images");
+        imageUrl  = res.url;
+        publicId  = res.publicId;
+      } catch(e) {
+        console.warn("Image upload:", e);
+        // استخدم dataUrl كـ fallback
+        imageUrl = imgs[0].dataUrl || "";
       }
-    };
-    window.quickLike._sheetLogged = true;
-  }
+    }
 
-  // تعليق
-  const origComment = window.submitComment;
-  if (typeof origComment === 'function' && !origComment._sheetLogged) {
-    window.submitComment = function(postId) {
-      const inp = document.getElementById('ci-' + postId);
-      const text = inp ? inp.value.trim() : '';
-      origComment.call(this, postId);
-      if (text) logInteractionToSheet('comment', 3, 'تعليق: ' + text.substring(0, 30));
-    };
-    window.submitComment._sheetLogged = true;
-  }
+    if (vids.length > 0 && vids[0].file) {
+      try {
+        const res = await window.cdnUpload(vids[0].file, "posts/videos");
+        videoUrl  = res.url;
+        publicId  = res.publicId;
+      } catch(e) {
+        console.warn("Video upload:", e);
+        videoUrl = vids[0].dataUrl || "";
+      }
+    }
 
-  // نشر ومضة
-  const origFlash = window.notifyNewFlashVideo;
-  if (typeof origFlash === 'function' && !origFlash._sheetLogged) {
-    window.notifyNewFlashVideo = function(entry) {
-      origFlash.call(this, entry);
-      logInteractionToSheet('flash', 10, 'نشر ومضة');
+    const postData = {
+      text       : text,
+      authorName : name,
+      authorPhoto: photo,
+      authorCat  : cat,
+      uid        : uid || "anon",
+      likes      : [],
+      commentsCount: 0,
+      createdAt  : serverTimestamp(),
+      privacy    : window.composerPrivacy || "عام",
+      imageUrl,
+      videoUrl,
+      publicId
     };
-    window.notifyNewFlashVideo._sheetLogged = true;
-  }
 
-  // قصة
-  const origStory = window.publishGosta;
-  if (typeof origStory === 'function' && !origStory._sheetLogged) {
-    window.publishGosta = function() {
-      origStory.apply(this, arguments);
-      setTimeout(() => logInteractionToSheet('story', 5, 'نشر قصة'), 3000);
-    };
-    window.publishGosta._sheetLogged = true;
-  }
-}
+    // ── حفظ في Firestore ──
+    await addDoc(collection(db, "posts"), postData);
 
-// ═══════════════════════════════════════════════════════════
-// § N — تحديث بيانات صفحة الأعضاء لدعم فتح الملف الشخصي
-// ═══════════════════════════════════════════════════════════
-function addFriendButtonToMemberCards() {
-  document.querySelectorAll('.member-card, .member-item, [class*="member"]').forEach(card => {
-    if (card._fpBound) return;
-    card._fpBound = true;
-    card.style.cursor = 'pointer';
-    card.addEventListener('click', function(e) {
-      if (e.target.closest('button, a, input')) return;
-      const nameEl = card.querySelector('[class*="name"], h3, h4, .font-bold');
-      const name = nameEl?.textContent?.trim() || '';
-      const photo = card.querySelector('img')?.src || '';
-      const ptsEl = card.querySelector('[class*="pts"], [class*="points"]');
-      const pts = parseInt(ptsEl?.textContent?.replace(/\D/g,'') || '0');
-      if (name) window.openFriendProfile({ name, photo, pts });
+    // ── إذا كان فيديو → أضفه لـ ومضة أيضاً ──
+    if (videoUrl) {
+      await addDoc(collection(db, "flash"), {
+        videoUrl, authorName: name, authorPhoto: photo,
+        uid: uid || "anon", likes: [], commentsCount: 0,
+        createdAt: serverTimestamp()
+      });
+    }
+
+    // ── تحديث نقاط المستخدم (+5 لكل منشور) ──
+    if (uid) {
+      const userRef = doc(db, "users", uid);
+      await updateDoc(userRef, { posts: increment(1), points: increment(5) }).catch(()=>{});
+    }
+
+    // أغلق المحرر وأظهر toast
+    if (typeof window.closePostComposer === "function") window.closePostComposer();
+    showToast("✅ تم نشر المنشور بنجاح!");
+    if (textarea) textarea.value = "";
+    window.composerMediaFiles = [];
+
+  } catch(err) {
+    console.error("publishPost:", err);
+    // Fallback للنشر المحلي
+    if (_origPublishPost) _origPublishPost();
+    showToast("⚠️ تم النشر محلياً — تحقق من الاتصال");
+  } finally {
+    if (pubBtn) { pubBtn.disabled = false; pubBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> نشر'; }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  STORIES — حفظ القصص في Cloudinary + Firestore
+// ═══════════════════════════════════════════════════════════════
+// مزامنة القصص من Firestore
+async function loadStories() {
+  try {
+    const q     = query(collection(db, "stories"), orderBy("createdAt", "desc"), limit(20));
+    const snap  = await getDocs(q);
+    const scroll = document.querySelector(".stories-scroll");
+    if (!scroll) return;
+
+    // احتفظ بزر إضافة قصة
+    const addCard = scroll.querySelector(".story-card.add-story");
+
+    snap.forEach(s => {
+      const d = s.data();
+      const card = document.createElement("div");
+      card.className = "story-card";
+      card.dataset.storyId = s.id;
+      const av = d.authorPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(d.authorName||"?")}&background=1a6dff&color=fff&size=60`;
+      card.innerHTML = `
+        <img src="${d.mediaUrl || d.authorPhoto || 'https://picsum.photos/seed/story-'+s.id+'/200/350'}" />
+        <div class="story-overlay"></div>
+        <img class="story-avatar" src="${av}" />
+        <div class="story-name">${escHtml(d.authorName || "")}</div>`;
+      card.onclick = () => showStoryViewer(d);
+      if (addCard) scroll.insertBefore(card, addCard.nextSibling);
+      else scroll.appendChild(card);
     });
-  });
+  } catch(e) { console.warn("Stories:", e); }
 }
 
-// ═══════════════════════════════════════════════════════════
-// § INIT MEGA PATCH
-// ═══════════════════════════════════════════════════════════
-async function MEGA_INIT() {
-  await new Promise(r => {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', r);
-    } else { r(); }
-  });
+// عرض قصة
+window.showStoryViewer = function(data) {
+  let overlay = document.getElementById("fs-story-viewer");
+  if (overlay) overlay.remove();
 
-  // انتظر بدء التهيئة الأصلية
-  await new Promise(r => setTimeout(r, 1000));
+  overlay = document.createElement("div");
+  overlay.id = "fs-story-viewer";
+  overlay.style.cssText = `position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center`;
 
-  if (localStorage.getItem('cdz_logged_in') !== '1') {
-    // راقب تسجيل الدخول
-    const _origApply = window.applyUserDataToApp;
-    if (typeof _origApply === 'function') {
-      window.applyUserDataToApp = function() {
-        _origApply.call(this);
-        setTimeout(MEGA_POST_LOGIN, 800);
-      };
-    }
-    return;
-  }
+  const isVideo = data.mediaUrl?.includes("/video/");
+  const mediaEl = isVideo
+    ? `<video src="${data.mediaUrl}" style="max-width:100%;max-height:100%;object-fit:contain" autoplay loop playsinline></video>`
+    : `<img src="${data.mediaUrl || data.authorPhoto}" style="max-width:100%;max-height:100%;object-fit:contain" />`;
 
-  await MEGA_POST_LOGIN();
-}
+  overlay.innerHTML = `
+    ${mediaEl}
+    <div style="position:absolute;top:16px;left:16px;right:16px;display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:8px">
+        <img src="${data.authorPhoto || ''}" style="width:36px;height:36px;border-radius:50%;border:2px solid #fff;object-fit:cover" />
+        <span style="color:#fff;font-family:var(--font-main);font-weight:700;font-size:.88rem">${escHtml(data.authorName || "")}</span>
+      </div>
+      <button onclick="document.getElementById('fs-story-viewer').remove()"
+        style="background:rgba(0,0,0,.5);border:none;color:#fff;border-radius:50%;width:34px;height:34px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>`;
 
-async function MEGA_POST_LOGIN() {
-  const user = localStorage.getItem('cdz_user_display') || '';
+  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+};
 
-  // ── عرض نقاط التفاعل فوراً من localStorage ──
-  if (user) {
-    const cachedInteract = parseInt(localStorage.getItem('nld_interact_pts_' + user) || '0');
-    if (cachedInteract > 0 && typeof window.userInteractPts !== 'undefined') {
-      window.userInteractPts = cachedInteract;
-    }
-  }
+// نشر قصة جديدة عبر Cloudinary
+window.fsPublishStory = async function(file) {
+  if (!file) return;
+  try {
+    const folder  = "stories";
+    const res     = await window.cdnUpload(file, folder);
+    const name    = localStorage.getItem("cdz_user_display") || "عضو";
+    const photo   = localStorage.getItem("cdz_user_photo")   || "";
+    const uid     = window._cdz_uid || "anon";
 
-  // تحميل نقاط التفاعل من Firebase (يُحدّث الأرقام في الخلفية)
-  await fastLoadProfileData();
-
-  // استعادة الصور المحفوظة
-  restoreSavedImages();
-
-  // تصحيح شريط التقدم
-  setTimeout(fixProgressBar, 500);
-
-  // تحديث الأصدقاء
-  updateFriendsCountDisplay();
-
-  // تحديث عدد المنشورات
-  await updateRealPostsCount();
-
-  // تهيئة لوحة التفاعلات الحقيقية
-  setTimeout(initRealAnalyticsDashboard, 800);
-
-  // اعتراض تغيير الصور
-  setTimeout(patchAvatarUpload, 600);
-
-  // اعتراض هدايا الومضة
-  setTimeout(patchFlashGiftToStars, 1000);
-
-  // اعتراض صفحة الأعضاء لفتح الملف الشخصي
-  setTimeout(patchMembersPageForFriendProfile, 1200);
-
-  // اعتراض جميع التفاعلات للتسجيل في الشيت
-  setTimeout(patchAllInteractionsForSheet, 1500);
-
-  // تحديث عروض النقاط
-  setTimeout(() => {
-    updateTotalPointsBar();
-    updateStarsWord();
-    if (typeof updateAllPointsDisplays === 'function') updateAllPointsDisplays();
-  }, 2000);
-
-  // بدء التحديث الدوري كل دقيقة
-  startPeriodicRefresh();
-
-  // إضافة مراقبة لتغيرات الأعضاء في صفحة الأعضاء (lazily)
-  setTimeout(() => {
-    const observer = new MutationObserver(() => {
-      addFriendButtonToMemberCards();
+    await addDoc(collection(db, "stories"), {
+      mediaUrl   : res.url,
+      publicId   : res.publicId,
+      authorName : name,
+      authorPhoto: photo,
+      uid,
+      createdAt  : serverTimestamp(),
+      expiresAt  : new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 ساعة
     });
-    const membersGrid = document.querySelector('#page-members, .members-grid, #members-list');
-    if (membersGrid) {
-      observer.observe(membersGrid, { childList: true, subtree: true });
-    }
-    addFriendButtonToMemberCards();
-  }, 2500);
+
+    showToast("✅ تم نشر قصتك!");
+    loadStories();
+  } catch(e) {
+    console.error("fsPublishStory:", e);
+    showToast("⚠️ حدث خطأ أثناء نشر القصة");
+  }
+};
+
+// ربط زر إضافة قصة بـ Cloudinary
+(function patchAddStory() {
+  const addCard = document.querySelector(".story-card.add-story");
+  if (!addCard) return;
+
+  // أنشئ input مخفي
+  let storyInput = document.getElementById("fs-story-input");
+  if (!storyInput) {
+    storyInput = document.createElement("input");
+    storyInput.type = "file";
+    storyInput.id   = "fs-story-input";
+    storyInput.accept = "image/*,video/*";
+    storyInput.style.display = "none";
+    storyInput.onchange = e => {
+      const file = e.target.files[0];
+      if (file) window.fsPublishStory(file);
+      e.target.value = "";
+    };
+    document.body.appendChild(storyInput);
+  }
+
+  addCard.onclick = () => storyInput.click();
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  LEADERBOARD — لوحة المتصدرين من Firestore
+// ═══════════════════════════════════════════════════════════════
+async function updateLeaderboard() {
+  try {
+    const q    = query(collection(db, "users"), orderBy("points", "desc"), limit(50));
+    const snap = await getDocs(q);
+    const tbody = document.getElementById("tourn-table-body");
+    if (!tbody) return;
+
+    let html   = "";
+    let rank   = 0;
+    const myUid = window._cdz_uid || "";
+
+    snap.forEach(u => {
+      rank++;
+      const d     = u.data();
+      const pts   = d.points || 0;
+      const av    = d.photo  || `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name||"?")}&background=1a6dff&color=fff&size=40`;
+      const isMe  = u.id === myUid;
+      const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
+      html += `
+        <div class="tourn-row ${isMe ? 'tourn-me' : ''}" style="${isMe ? 'background:rgba(26,109,255,.08);border-right:3px solid var(--primary);' : ''}">
+          <span style="font-weight:900;font-size:${rank<=3?'1.1rem':'.88rem'}">${medal}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <img src="${av}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:2px solid ${isMe?'var(--primary)':'var(--border)'}" />
+            <span style="font-family:var(--font-main);font-size:.82rem;font-weight:${isMe?900:700}">${escHtml(d.name||"عضو")}${isMe?' ⭐':''}</span>
+          </div>
+          <span style="font-family:var(--font-main);font-weight:900;color:var(--primary)">${pts.toLocaleString("ar-DZ")}</span>
+          <span><i class="fa-solid fa-arrow-up" style="color:#16a34a;font-size:.75rem"></i></span>
+        </div>`;
+    });
+
+    if (html) tbody.innerHTML = html;
+  } catch(e) { console.warn("Leaderboard:", e); }
 }
 
-// تشغيل
-MEGA_INIT().catch(e => console.warn('[CDZ MEGA]', e));
+// ═══════════════════════════════════════════════════════════════
+//  USER POST COUNT
+// ═══════════════════════════════════════════════════════════════
+async function refreshUserPostCount(uid) {
+  try {
+    const q    = query(collection(db, "posts"), where("uid", "==", uid));
+    const snap = await getDocs(q);
+    const count = snap.size;
 
-})(); // end CDZ_MEGA_PATCH
+    const statsEl = document.querySelector(".profile-stat-item .stat-val");
+    if (statsEl) statsEl.textContent = count;
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+function formatTime(date) {
+  const now  = new Date();
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 60)  return "الآن";
+  if (diff < 3600) return `منذ ${Math.floor(diff/60)} دقيقة`;
+  if (diff < 86400) return `منذ ${Math.floor(diff/3600)} ساعة`;
+  return date.toLocaleDateString("ar-DZ");
+}
+
+function escHtml(str) {
+  return String(str || "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;");
+}
+
+function showToast(msg) {
+  let toast = document.getElementById("fs-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "fs-toast";
+    toast.style.cssText = `
+      position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+      background:rgba(0,0,0,.85);color:#fff;
+      padding:10px 20px;border-radius:999px;
+      font-family:var(--font-main);font-size:.85rem;font-weight:700;
+      z-index:99999;pointer-events:none;
+      transition:opacity .3s;backdrop-filter:blur(8px);`;
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = "1";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { toast.style.opacity = "0"; }, 3000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LOGIN PATCH — بعد تسجيل الدخول من Google Sheet، مزامنة Firestore
+// ═══════════════════════════════════════════════════════════════
+const _origApplyUserData = window.applyUserDataToApp;
+window.applyUserDataToApp = function() {
+  if (_origApplyUserData) _origApplyUserData();
+  // مزامنة Firestore بعد تطبيق بيانات المستخدم
+  setTimeout(() => {
+    syncUserProfile();
+    loadStories();
+    updateLeaderboard();
+  }, 500);
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  INIT — تشغيل عند تحميل الصفحة
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener("DOMContentLoaded", function() {
+  // إذا كان المستخدم مسجل سلفاً
+  if (localStorage.getItem("cdz_logged_in") === "1") {
+    setTimeout(() => {
+      syncUserProfile();
+      loadStories();
+      updateLeaderboard();
+    }, 800);
+  }
+});
+
 </script>
-
 </html>
