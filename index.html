@@ -4168,6 +4168,52 @@
     <i class="fa-solid fa-user-group"></i>
   </button>
 
+  <!-- FAB: New Chat (زر + لبدء محادثة مع مستخدم حقيقي) -->
+  <button id="new-chat-fab" onclick="openNewChatPanel()" style="
+    display:none;position:fixed;bottom:80px;right:18px;
+    width:56px;height:56px;border-radius:50%;
+    background:linear-gradient(135deg,#25D366,#128C7E);
+    color:#fff;border:none;
+    display:none;align-items:center;justify-content:center;
+    font-size:1.5rem;box-shadow:0 4px 20px rgba(37,211,102,.5);
+    z-index:400;cursor:pointer;transition:transform .2s,box-shadow .2s;
+    flex-shrink:0;">
+    <i class="fa-solid fa-plus"></i>
+  </button>
+
+  <!-- لوحة اختيار مستخدم لبدء محادثة -->
+  <div id="new-chat-panel" style="
+    display:none;position:fixed;inset:0;z-index:8000;
+    background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+    align-items:flex-end;justify-content:center;">
+    <div style="
+      background:#fff;width:100%;max-width:430px;
+      border-radius:24px 24px 0 0;max-height:80vh;
+      display:flex;flex-direction:column;
+      animation:slideUp .3s ease;">
+      <!-- Header -->
+      <div style="padding:16px 18px;border-bottom:1px solid #e4e6eb;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <span style="font-family:var(--font-main);font-weight:900;font-size:1rem;display:flex;align-items:center;gap:8px">
+          <i class="fa-brands fa-whatsapp" style="color:#25D366"></i> محادثة جديدة
+        </span>
+        <button onclick="closeNewChatPanel()" style="background:#f0f2f5;border:none;border-radius:50%;width:34px;height:34px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.9rem">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <!-- Search -->
+      <div style="padding:10px 14px;flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:8px;background:#f0f2f5;border-radius:999px;padding:9px 14px">
+          <i class="fa-solid fa-magnifying-glass" style="color:#65676b;font-size:.85rem"></i>
+          <input id="new-chat-search" type="text" placeholder="ابحث عن عضو..."
+            oninput="filterNewChatUsers(this.value)"
+            style="border:none;background:transparent;outline:none;font-family:var(--font-body);font-size:.88rem;flex:1;direction:rtl" />
+        </div>
+      </div>
+      <!-- Users List -->
+      <div id="new-chat-users-list" style="flex:1;overflow-y:auto;padding:4px 0"></div>
+    </div>
+  </div>
+
   <!-- ══ CHAT WINDOW (WhatsApp style) ══ -->
   <div id="chat-window" class="chat-window-overlay">
     <!-- Topbar -->
@@ -15016,6 +15062,374 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch(e) {}
   }, 2000);
 });
+
+// ═══════════════════════════════════════════════════════════════
+//  ✅ PATCH A: المستخدمون الحقيقيون من الجدول الجديد
+//  يستبدل كل المستخدمين القدامى بالـ 21 مستخدم الحقيقيين
+// ═══════════════════════════════════════════════════════════════
+const REAL_USERS = [
+  {email:"salsabilhandmade@gmail.com",name:"Ayad salsabil",dob:"8/13/2012",blood:"A+",photo:"https://drive.google.com/thumbnail?id=1QCJthOwGBYWQbXcgSS99YyzJyG7Ydxcy&sz=w200",gender:"",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0674187382",points:0,stars:0},
+  {email:"yacinrajaa85@gmail.com",name:"Yacine Rajàa",dob:"1/19/2013",blood:"A+",photo:"https://drive.google.com/thumbnail?id=1sbwZ6r8P2QnPBbg2ai5wZBWBEsWjJy94&sz=w200",gender:"",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0795987508",points:0,stars:0},
+  {email:"itsmohajr122@gmail.com",name:"حمودي محمد الأمين",dob:"3/23/2006",blood:"O+",photo:"https://drive.google.com/thumbnail?id=1o71gGbSjgnkWe3w6uIsn_dRChN_EU6Xz&sz=w200",gender:"",cat:"شاب",level:"متوسط",wilaya:"تلمسان",phone:"0798364356",points:0,stars:0},
+  {email:"yr5788774@gmail.com",name:"Yacine Rajàa",dob:"1/19/2014",blood:"A+",photo:"https://drive.google.com/thumbnail?id=14-EIJkhgu-nLG_Y8TfSYWOyJx5okb6-_&sz=w200",gender:"",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0784105401",points:0,stars:0},
+  {email:"chebab.amal.tlemcen2019@gmail.com",name:"بوكلي اسمهان",dob:"2/24/1987",blood:"A+",photo:"https://drive.google.com/thumbnail?id=1QNICWjxR-VtKOcfJFAcqt7oyVDFWDIfL&sz=w200",gender:"",cat:"شاب",level:"جامعي",wilaya:"وهران",phone:"00000",points:0,stars:0},
+  {email:"smartkidslab13@gmail.com",name:"بلغربي نصر الدين",dob:"3/7/2007",blood:"A+",photo:"https://drive.google.com/thumbnail?id=11-oBHhYzHkmHeCsRsGfeeMeGmYx-GLyJ&sz=w200",gender:"ذكر",cat:"شاب",level:"جامعي",wilaya:"تلمسان",phone:"*****",points:0,stars:0},
+  {email:"abdelganihamoudi@gmail.com",name:"حمودي عبد الغاني",dob:"4/6/2010",blood:"A+",photo:"https://drive.google.com/thumbnail?id=15RS7v8rB6kUz88FcfBkFAT96Lhei4o8v&sz=w200",gender:"ذكر",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0776174350",points:0,stars:0},
+  {email:"sefisfichaima@gmail.com",name:"اسراء سفيسيفي",dob:"2/11/2015",blood:"A+",photo:"https://drive.google.com/thumbnail?id=17LlY9RowCyo0Dgt1lq2UPodvSpY4dlUm&sz=w200",gender:"أنثى",cat:"طفل",level:"ابتدائي",wilaya:"تلمسان",phone:"0656236462",points:0,stars:0},
+  {email:"malikaailas87@gmail.com",name:"أنس سفيسيفي",dob:"3/27/2013",blood:"B+",photo:"https://drive.google.com/thumbnail?id=1kPk7cg7uTgRbxT--YiHkVRhXbBzfCb2K&sz=w200",gender:"ذكر",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0656236462",points:0,stars:0},
+  {email:"yahiadichtlm@gmail.com",name:"ديش سيف الاسلام",dob:"3/7/1989",blood:"B+",photo:"https://drive.google.com/thumbnail?id=1cMXgb4BrusRZmxO-uz3sC0Ny-f4mfLSG&sz=w200",gender:"ذكر",cat:"شاب",level:"جامعي",wilaya:"تلمسان",phone:"",points:0,stars:0},
+  {email:"abdohamudi@gmail.com",name:"حمودي عبد المؤمن",dob:"16/04/2007",blood:"A-",photo:"",gender:"ذكر",cat:"شاب",level:"متوسط",wilaya:"تلمسان",phone:"",points:103,stars:2},
+  {email:"kemouchedouaa97@gmail.com",name:"Kemouche douaa chaimae",dob:"5/24/2012",blood:"A+",photo:"https://drive.google.com/thumbnail?id=1UfCPOi1r9IFczifbU2Aea8iTv0ryoMyh&sz=w200",gender:"أنثى",cat:"شاب",level:"متوسط",wilaya:"تلمسان",phone:"06.96.02.89.03",points:0,stars:0},
+  {email:"y0773415454@gmail.com",name:"منال كازي اول",dob:"12/14/2003",blood:"A+",photo:"https://drive.google.com/thumbnail?id=1Odg-J1lsOVZKxdBE41ro1CUazZ8mh5mL&sz=w200",gender:"أنثى",cat:"شاب",level:"جامعي",wilaya:"تلمسان",phone:"0000",points:0,stars:0},
+  {email:"benkaddourimene@gmail.com",name:"بن قدور ايمان",dob:"12/30/1987",blood:"O+",photo:"https://drive.google.com/thumbnail?id=1tFgyJwHf0m2iSNtRaE9aBd0eSjAmbv53&sz=w200",gender:"أنثى",cat:"شاب",level:"جامعي",wilaya:"تلمسان",phone:"0674187382",points:0,stars:0},
+  {email:"chaimaachaimoua52@gmail.com",name:"طبال شيماء",dob:"3/19/2005",blood:"B",photo:"https://drive.google.com/thumbnail?id=1Xl4PZtowK29i_iqV9ApwwTDHWdQL8f93&sz=w200",gender:"أنثى",cat:"شاب",level:"جامعي",wilaya:"تلمسان",phone:"0791232420",points:0,stars:0},
+  {email:"mcagadirtelmcen@gmail.com",name:"يحي ديش",dob:"6/8/1991",blood:"A+",photo:"https://drive.google.com/thumbnail?id=14uY4UYcRn89ALvYxtrU4MeORGqNHT5Wd&sz=w200",gender:"ذكر",cat:"شاب",level:"جامعي",wilaya:"تلمسان",phone:"0575",points:100,stars:300},
+  {email:"salimtlm452@gmail.com",name:"عبد الرؤوف بن شريف",dob:"3/12/1991",blood:"AB",photo:"https://drive.google.com/thumbnail?id=1vvXDD-BID4NDt4GEOFyrvZLbg-q_eUIu&sz=w200",gender:"ذكر",cat:"طفل",level:"ابتدائي",wilaya:"تلمسان",phone:"0000000",points:0,stars:0},
+  {email:"habibkaissomhabib@gmail.com",name:"قيسوم حابيب",dob:"2/18/2011",blood:"O+",photo:"",gender:"ذكر",cat:"طفل",level:"ثانوي",wilaya:"تلمسان",phone:"0775744059",points:250,stars:0},
+  {email:"ismailartiste033@gmail.com",name:"بن يوسفي سماعين",dob:"7/22/2013",blood:"A+",photo:"",gender:"ذكر",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0556435412",points:150,stars:0},
+  {email:"younescha2012@gmail.com",name:"شافع يونس",dob:"5/9/2012",blood:"O",photo:"",gender:"ذكر",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0659725615",points:150,stars:0},
+  {email:"oussama131tlm@gmail.com",name:"قيسوم أسامة",dob:"10/11/2012",blood:"O+",photo:"",gender:"ذكر",cat:"طفل",level:"متوسط",wilaya:"تلمسان",phone:"0779059165",points:150,stars:0}
+];
+window.REAL_USERS = REAL_USERS;
+
+// دالة مساعدة: صورة المستخدم أو أفاتار افتراضي
+function getRealUserAvatar(u) {
+  if (u.photo && u.photo.startsWith('http')) return u.photo;
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=1a6dff&color=fff&size=200`;
+}
+window.getRealUserAvatar = getRealUserAvatar;
+
+// ── تحديث doLogin ليعمل مع REAL_USERS مباشرةً دون الحاجة لجلب الشيت ──
+(function patchLoginWithRealUsers() {
+  const _origLogin = window.doLogin;
+  window.doLogin = async function() {
+    // امسح الأخطاء
+    if (typeof loginClearErr === 'function') loginClearErr();
+    const emailEl = document.getElementById('login-email');
+    const passEl  = document.getElementById('login-pass');
+    const btn     = document.getElementById('login-submit-btn');
+    const btnText = document.getElementById('login-btn-text');
+    const email   = (emailEl?.value || '').trim().toLowerCase();
+    const pass    = (passEl?.value  || '').trim();
+
+    if (!email || !pass) {
+      if (typeof loginShowErr === 'function') loginShowErr('يرجى إدخال البريد الإلكتروني وكلمة السر');
+      return;
+    }
+
+    if (btn) btn.classList.add('loading');
+    if (btnText) btnText.textContent = 'جارٍ التحقق...';
+
+    // بحث المستخدم في الجدول الحقيقي
+    const found = REAL_USERS.find(u => u.email === email);
+
+    if (found) {
+      const avatarSrc = getRealUserAvatar(found);
+      localStorage.setItem('cdz_logged_in',   '1');
+      localStorage.setItem('cdz_user_email',  found.email);
+      localStorage.setItem('cdz_user_display',found.name);
+      localStorage.setItem('cdz_user_age',    found.dob);
+      localStorage.setItem('cdz_user_photo',  avatarSrc);
+      localStorage.setItem('cdz_user_cat',    found.cat);
+      localStorage.setItem('cdz_user_points', String(found.points));
+      localStorage.setItem('cdz_user_stars',  String(found.stars));
+      localStorage.setItem('cdz_user_level',  found.level);
+      localStorage.setItem('cdz_user_wilaya', found.wilaya);
+      localStorage.setItem('cdz_user_blood',  found.blood);
+      localStorage.setItem('cdz_user_phone',  found.phone);
+
+      if (typeof loginShowOk === 'function') loginShowOk('✅ مرحباً ' + found.name + '! جاري الدخول...');
+
+      setTimeout(() => {
+        document.getElementById('login-screen')?.classList.add('hidden');
+        if (typeof applyAppLang === 'function') applyAppLang(typeof loginCurrentLang !== 'undefined' ? loginCurrentLang : 'ar');
+        if (typeof applyUserDataToApp === 'function') applyUserDataToApp();
+      }, 1200);
+    } else {
+      if (typeof loginShowErr === 'function') loginShowErr('❌ هذا البريد الإلكتروني غير مسجل في المنصة', 'email');
+      if (btn) btn.classList.remove('loading');
+      if (btnText) btnText.textContent = typeof loginT === 'function' ? loginT('login') : 'دخول';
+    }
+  };
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  ✅ PATCH B: زر + في واتساب — قائمة المستخدمين الحقيقيين
+// ═══════════════════════════════════════════════════════════════
+window.openNewChatPanel = function() {
+  const panel = document.getElementById('new-chat-panel');
+  if (!panel) return;
+  panel.style.display = 'flex';
+  renderNewChatUsers('');
+  setTimeout(() => document.getElementById('new-chat-search')?.focus(), 200);
+};
+
+window.closeNewChatPanel = function() {
+  const panel = document.getElementById('new-chat-panel');
+  if (panel) panel.style.display = 'none';
+};
+
+function renderNewChatUsers(filter) {
+  const list = document.getElementById('new-chat-users-list');
+  if (!list) return;
+  const me = localStorage.getItem('cdz_user_email') || '';
+  const fl = filter.trim().toLowerCase();
+  const filtered = REAL_USERS.filter(u =>
+    u.email !== me &&
+    (fl === '' || u.name.toLowerCase().includes(fl) || u.wilaya.toLowerCase().includes(fl))
+  );
+  if (!filtered.length) {
+    list.innerHTML = '<div style="padding:30px;text-align:center;color:#65676b;font-family:var(--font-main);font-size:.85rem">لا يوجد نتائج</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(u => {
+    const av = getRealUserAvatar(u);
+    const initial = u.name.trim()[0] || '?';
+    return `<div onclick="startChatWithUser('${u.email.replace(/'/g,"\\'")}','${u.name.replace(/'/g,"\\'")}','${av}')"
+      style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;transition:background .15s;border-bottom:1px solid #f0f2f5"
+      onmouseenter="this.style.background='#f7f8fa'" onmouseleave="this.style.background='transparent'">
+      <div style="position:relative;flex-shrink:0">
+        <img src="${av}" onerror="this.onerror=null;this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=1a6dff&color=fff&size=80'"
+          style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid #e4e6eb" />
+        <span style="position:absolute;bottom:2px;right:2px;width:10px;height:10px;background:#25D366;border-radius:50%;border:2px solid #fff"></span>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-main);font-weight:800;font-size:.9rem;color:#1c1e21">${u.name}</div>
+        <div style="font-size:.75rem;color:#65676b;font-family:var(--font-body)">${u.cat || ''} · ${u.wilaya || ''}</div>
+      </div>
+      <i class="fa-solid fa-chevron-left" style="color:#b0b3b8;font-size:.75rem"></i>
+    </div>`;
+  }).join('');
+}
+
+window.filterNewChatUsers = function(val) { renderNewChatUsers(val); };
+
+window.startChatWithUser = function(email, name, avatarSrc) {
+  window.closeNewChatPanel();
+
+  // افتح نافذة المحادثة مع هذا المستخدم
+  const win = document.getElementById('chat-window') || (typeof $ === 'function' ? $('#chat-window') : null);
+  if (!win) return;
+  win.classList.add('open');
+  win.dataset.isGroup = 'false';
+  win.dataset.contactEmail = email;
+
+  const nameEl = document.getElementById('chat-contact-name');
+  if (nameEl) nameEl.textContent = name;
+
+  const statusEl = document.getElementById('chat-contact-status');
+  if (statusEl) statusEl.textContent = 'نشط الآن';
+
+  const avatarEl = document.getElementById('chat-contact-avatar');
+  if (avatarEl) { avatarEl.src = avatarSrc; avatarEl.style.display = ''; }
+
+  const callAv = document.getElementById('call-avatar');
+  if (callAv) callAv.src = avatarSrc;
+
+  ['cb-avatar-1','cb-avatar-2','cb-avatar-3'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.src = avatarSrc;
+  });
+
+  // مسح رسائل المحادثة السابقة واستبدالها بمحادثة هذا المستخدم
+  const msgsEl = document.getElementById('chat-messages');
+  if (msgsEl) {
+    const stored = localStorage.getItem('cdz_chat_' + email);
+    if (stored) {
+      try { msgsEl.innerHTML = JSON.parse(stored); } catch(e) {}
+    } else {
+      msgsEl.innerHTML = `
+        <div style="text-align:center;padding:20px 14px">
+          <span style="background:#e2ffc7;color:#128C7E;font-family:var(--font-body);font-size:.75rem;padding:6px 14px;border-radius:12px;display:inline-block">
+            🔒 الرسائل مشفرة من طرف إلى طرف
+          </span>
+        </div>`;
+    }
+    setTimeout(() => msgsEl.scrollTop = msgsEl.scrollHeight, 100);
+  }
+
+  // حفظ المحادثة في قائمة المحادثات
+  _ensureConversation(email, name, avatarSrc);
+
+  if (typeof setupLongPressConv === 'function') setupLongPressConv();
+  if (typeof setupLongPressMessages === 'function') setupLongPressMessages();
+  if (typeof setupRecordBtn === 'function') setupRecordBtn();
+};
+
+// إضافة المستخدم لقائمة المحادثات إن لم يكن موجوداً
+function _ensureConversation(email, name, avatarSrc) {
+  const list = document.getElementById('conversations-list');
+  if (!list) return;
+  if (list.querySelector(`[data-contact-email="${CSS.escape(email)}"]`)) return;
+
+  const item = document.createElement('div');
+  item.className = 'msg-conv-item';
+  item.dataset.contactEmail = email;
+  item.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;border-bottom:1px solid #f0f2f5;transition:background .15s';
+  item.onmouseenter = () => item.style.background = '#f7f8fa';
+  item.onmouseleave = () => item.style.background = '';
+  item.onclick = () => window.startChatWithUser(email, name, avatarSrc);
+  item.innerHTML = `
+    <div style="position:relative;flex-shrink:0">
+      <img src="${avatarSrc}" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1a6dff&color=fff&size=80'"
+        style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:2px solid #e4e6eb" />
+      <span style="position:absolute;bottom:2px;right:2px;width:10px;height:10px;background:#25D366;border-radius:50%;border:2px solid #fff"></span>
+    </div>
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--font-main);font-weight:800;font-size:.9rem;color:#1c1e21">${name}</div>
+      <div class="msg-conv-preview" style="font-size:.8rem;color:#65676b;font-family:var(--font-body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">ابدأ محادثة...</div>
+    </div>
+    <div style="font-size:.7rem;color:#65676b;font-family:var(--font-body);flex-shrink:0">الآن</div>`;
+  list.insertBefore(item, list.firstChild);
+}
+
+// إظهار FAB عند الانتقال لصفحة واتساب
+(function watchMessengerPage() {
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-page]');
+    if (!btn) return;
+    const fab = document.getElementById('new-chat-fab');
+    if (!fab) return;
+    if (btn.dataset.page === 'messenger') {
+      fab.style.display = 'flex';
+    } else {
+      fab.style.display = 'none';
+      window.closeNewChatPanel?.();
+    }
+  });
+  // إغلاق اللوحة بالضغط على الخلفية
+  document.getElementById('new-chat-panel')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('new-chat-panel')) window.closeNewChatPanel();
+  });
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  ✅ PATCH C: زر الإعجاب — يتحول للأخضر عند الضغط ✅ (تأكيد)
+// ═══════════════════════════════════════════════════════════════
+// تأكيد أن liked-green يعمل مع نقاط إضافية
+(function ensureLikedGreenStyle() {
+  const styleEl = document.createElement('style');
+  styleEl.textContent = `
+    .reaction-btn.liked-green {
+      color: #00c853 !important;
+      background: rgba(0,200,83,.08) !important;
+      border-radius: var(--radius-sm,8px);
+    }
+    .reaction-btn.liked-green i {
+      color: #00c853 !important;
+    }
+    .reaction-btn { transition: color .2s, background .2s; }
+  `;
+  document.head.appendChild(styleEl);
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  ✅ PATCH D: تفعيل نقاط ثلاث في المنشور، عداد المشاركة،
+//             عداد التعليقات، عداد المشاهدات
+// ═══════════════════════════════════════════════════════════════
+(function patchPostCounters() {
+
+  // ── عداد المشاهدات: يزداد عند ظهور المنشور في الشاشة ──
+  function observePostViews() {
+    if (!('IntersectionObserver' in window)) return;
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        const card = entry.target;
+        if (card._viewed) return;
+        card._viewed = true;
+        const vc = card.querySelector('.views-count');
+        if (vc) vc.textContent = parseInt(vc.textContent||0) + 1;
+      });
+    }, { threshold: 0.6 });
+
+    document.querySelectorAll('.post-card').forEach(c => obs.observe(c));
+
+    // مراقبة المنشورات الجديدة
+    const feed = document.getElementById('feed-section');
+    if (feed) {
+      new MutationObserver(muts => {
+        muts.forEach(m => m.addedNodes.forEach(n => {
+          if (n.nodeType === 1 && n.classList?.contains('post-card')) obs.observe(n);
+        }));
+      }).observe(feed, { childList: true });
+    }
+  }
+
+  // ── عداد المشاركة: يزداد عند اختيار "مشاركة" ──
+  const _origShareToProfile = window.shareToProfile;
+  window.shareToProfile = function() {
+    if (_origShareToProfile) _origShareToProfile();
+    _incrementShareCount();
+  };
+  const _origSendToFriends = window.sendToFriends;
+  window.sendToFriends = function() {
+    if (_origSendToFriends) _origSendToFriends();
+    _incrementShareCount();
+  };
+  function _incrementShareCount() {
+    const pid = window.currentSharePostId;
+    if (!pid) return;
+    const card = document.querySelector(`[data-post-id="${pid}"]`) ||
+                 document.querySelector(`[data-fsid="${pid}"]`);
+    if (!card) return;
+    let sc = card.querySelector('.share-count-badge');
+    if (!sc) {
+      // أضف شارة مشاركة بجانب زر مشاركة
+      const shareBtn = [...card.querySelectorAll('.reaction-btn')].find(b => b.textContent.includes('مشاركة'));
+      if (shareBtn) {
+        sc = document.createElement('span');
+        sc.className = 'share-count-badge';
+        sc.style.cssText = 'font-size:.75rem;color:var(--primary);font-weight:800;margin-right:3px';
+        sc.textContent = '1';
+        shareBtn.appendChild(sc);
+      }
+    } else {
+      sc.textContent = parseInt(sc.textContent||0) + 1;
+    }
+  }
+
+  // ── تأكيد عداد التعليقات ──
+  const _origSubmitComment = window.submitComment;
+  window.submitComment = function(postId) {
+    if (_origSubmitComment) _origSubmitComment(postId);
+    // زد العداد بعد submit
+    setTimeout(() => {
+      const cc = document.getElementById('cc-' + postId);
+      if (cc) {
+        const cur = parseInt(cc.textContent || 0);
+        cc.textContent = cur + 1;
+      }
+    }, 100);
+  };
+
+  document.addEventListener('DOMContentLoaded', () => setTimeout(observePostViews, 1500));
+  if (document.readyState !== 'loading') setTimeout(observePostViews, 1500);
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  ✅ PATCH E: الفيديو يوجه لومضة (72h) — تأكيد + حذف تلقائي
+// ═══════════════════════════════════════════════════════════════
+(function ensureVideoToFlash() {
+  // تأكيد إزالة الفيديوهات التي مضى عليها 72 ساعة
+  function cleanExpiredFlash() {
+    try {
+      let vids = JSON.parse(localStorage.getItem('cdz_flash_videos') || '[]');
+      const now = Date.now();
+      const filtered = vids.filter(v => now - (v.publishedAt || 0) < 72 * 3600000);
+      if (filtered.length !== vids.length) {
+        localStorage.setItem('cdz_flash_videos', JSON.stringify(filtered));
+        // أزل من الـ DOM أيضاً
+        vids.filter(v => now - (v.publishedAt||0) >= 72 * 3600000).forEach(v => {
+          document.querySelectorAll(`.flash-item`).forEach(el => {
+            if (el._flashEntry?.id === v.id) el.remove();
+          });
+        });
+      }
+    } catch(e) {}
+  }
+  cleanExpiredFlash();
+  setInterval(cleanExpiredFlash, 60000); // تحقق كل دقيقة
+})();
 
 </script>
 </html>
