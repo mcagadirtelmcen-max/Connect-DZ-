@@ -4729,6 +4729,35 @@
             <div class="wheel-account-name" id="wa-name-0"></div>
           </div>
 
+          <!-- زر إضافة حساب -->
+          <div class="wheel-account-item" id="add-account-btn" onclick="openAddAccountPanel()" style="cursor:pointer">
+            <div class="wheel-account-avatar-wrap">
+              <div style="width:36px;height:36px;border-radius:50%;background:var(--primary-light);display:flex;align-items:center;justify-content:center;border:2px dashed var(--primary)">
+                <i class="fa-solid fa-plus" style="color:var(--primary);font-size:.9rem"></i>
+              </div>
+            </div>
+            <div class="wheel-account-name" style="color:var(--primary);font-size:.72rem">إضافة حساب</div>
+          </div>
+        </div>
+
+        <!-- لوحة إضافة حساب جديد -->
+        <div id="add-account-panel" style="display:none;padding:12px 14px;background:#f8faff;border-radius:10px;margin-top:8px;border:1px solid var(--border)">
+          <div style="font-family:var(--font-main);font-size:.82rem;font-weight:800;color:var(--text-main);margin-bottom:10px">🔐 تسجيل دخول حساب آخر</div>
+          <input id="add-acct-email" type="email" placeholder="البريد الإلكتروني"
+            style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:var(--font-body);font-size:.85rem;margin-bottom:8px;outline:none;background:#fff;color:var(--text-main);direction:ltr" />
+          <input id="add-acct-pass" type="password" placeholder="كلمة السر"
+            style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:var(--font-body);font-size:.85rem;margin-bottom:10px;outline:none;background:#fff;color:var(--text-main);direction:ltr" />
+          <div style="display:flex;gap:8px">
+            <button onclick="doAddAccount()"
+              style="flex:1;padding:9px;background:var(--primary);color:#fff;border:none;border-radius:8px;font-family:var(--font-main);font-size:.82rem;font-weight:800;cursor:pointer">
+              <i class="fa-solid fa-right-to-bracket"></i> دخول وحفظ
+            </button>
+            <button onclick="closeAddAccountPanel()"
+              style="padding:9px 14px;background:var(--bg);border:none;border-radius:8px;font-family:var(--font-main);font-size:.82rem;cursor:pointer;color:var(--text-muted)">
+              إلغاء
+            </button>
+          </div>
+          <div id="add-acct-msg" style="margin-top:8px;font-family:var(--font-main);font-size:.78rem;color:var(--primary);min-height:20px;text-align:center"></div>
         </div>
       </div>
 
@@ -4990,14 +5019,20 @@
       </div>
     </div>
 
-    <!-- Comment bar (separate row) -->
+    <!-- Comment bar + music btn (separate row) -->
     <div style="position:absolute;bottom:0;left:0;right:0;padding:0 14px 16px;z-index:11;display:flex;gap:8px;align-items:center;">
-      <div class="sv-comment-input-wrap">
+      <button id="sv-music-add-btn" title="إضافة موسيقى" onclick="svAddMusicToStory()"
+        style="background:rgba(255,255,255,.18);border:none;color:#fff;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:1rem;backdrop-filter:blur(6px)">
+        <i class="fa-solid fa-music"></i>
+      </button>
+      <input type="file" id="sv-music-input" accept="audio/mp3,audio/*" style="display:none" onchange="svLoadStoryMusic(this)" />
+      <div class="sv-comment-input-wrap" style="flex:1">
         <input class="sv-comment-input" id="sv-comment-input" type="text" placeholder="أرسل تعليقاً..." />
         <button class="sv-send-btn" onclick="svSendComment()"><i class="fa-solid fa-paper-plane"></i></button>
       </div>
     </div>
-  </div>
+    <!-- Audio element for story music -->
+    <audio id="sv-story-audio" loop style="display:none"></audio>
 
   <!-- ══════════════════════════════════════════════════
        PAGE: ACTIVITIES (النشاطات)
@@ -6924,10 +6959,78 @@ function renderBankTransactions() {
 window.openDigitalModal = function() {
   renderDigitalBoard();
   document.getElementById('digital-modal-overlay').classList.add('open');
+  // جلب إحصاءات التفاعل الحقيقية من Firestore
+  fetchRealInteractionStats();
 };
 window.closeDigitalModal = function() {
   document.getElementById('digital-modal-overlay').classList.remove('open');
 };
+
+// جلب إحصاءات التفاعل الحقيقية من Firestore
+async function fetchRealInteractionStats() {
+  try {
+    const uid = window._cdz_uid;
+    const db  = window._firestoreDB;
+    if (!uid || !db) return;
+    const { collection, query, where, getDocs } = window._firestoreUtils || {};
+    if (!collection || !query || !where || !getDocs) return;
+
+    // المنشورات
+    const postsQ = query(collection(db, 'posts'), where('uid', '==', uid));
+    const postsSnap = await getDocs(postsQ);
+    let totalViews = 0, totalLikes = 0, totalComments = 0, totalShares = 0;
+    postsSnap.forEach(d => {
+      const data = d.data();
+      totalViews    += data.views || 0;
+      totalLikes    += (data.likes || []).length;
+      totalComments += data.commentsCount || 0;
+      totalShares   += data.shares || 0;
+    });
+
+    // تحديث اللوحة
+    const statsBox = document.getElementById('dboard-interact-pts');
+    if (statsBox) {
+      const totalInteract = totalViews + totalLikes * 3 + totalComments * 5 + totalShares * 2;
+      statsBox.textContent = totalInteract.toLocaleString('ar-DZ');
+      userInteractPts = totalInteract;
+    }
+
+    // إضافة مربعات إحصاء إن لم تكن موجودة
+    let statsGrid = document.getElementById('dboard-real-stats-grid');
+    if (!statsGrid) {
+      const ptsGrid = document.querySelector('.dboard-pts-grid');
+      if (ptsGrid) {
+        statsGrid = document.createElement('div');
+        statsGrid.id = 'dboard-real-stats-grid';
+        statsGrid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0';
+        ptsGrid.after(statsGrid);
+      }
+    }
+    if (statsGrid) {
+      statsGrid.innerHTML = `
+        <div style="background:#f0fdf4;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">👁️</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#14532d">${totalViews.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#16a34a;font-family:var(--font-main)">مشاهدة</div>
+        </div>
+        <div style="background:#fff8e1;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">❤️</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#b45309">${totalLikes.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#d97706;font-family:var(--font-main)">إعجاب</div>
+        </div>
+        <div style="background:#f0f9ff;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">💬</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#075985">${totalComments.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#0369a1;font-family:var(--font-main)">تعليق</div>
+        </div>
+        <div style="background:#fdf4ff;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">🔗</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#6b21a8">${totalShares.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#a855f7;font-family:var(--font-main)">مشاركة</div>
+        </div>`;
+    }
+  } catch(e) { console.warn('fetchRealInteractionStats:', e); }
+}
 
 function renderDigitalBoard() {
   const lvl = getCurrentLevel();
@@ -7214,9 +7317,24 @@ if (document.readyState === 'loading') {
     const file = this.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = function(e) { $('#cover-img').src = e.target.result; };
+    reader.onload = function(e) {
+      const src = e.target.result;
+      const coverImg = $('#cover-img');
+      if (coverImg) coverImg.src = src;
+      // حفظ صورة الغلاف في localStorage
+      try { localStorage.setItem('cdz_cover_photo', src); } catch(err) {}
+    };
     reader.readAsDataURL(file);
   });
+
+  // استعادة صورة الغلاف عند التحميل
+  (function restoreCoverPhoto() {
+    const saved = localStorage.getItem('cdz_cover_photo');
+    if (saved) {
+      const coverImg = document.getElementById('cover-img');
+      if (coverImg) coverImg.src = saved;
+    }
+  })();
 
 
   // ── JS: IMAGE UPLOAD — AVATAR ────────────────────────────────
@@ -7226,13 +7344,51 @@ if (document.readyState === 'loading') {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = function(e) {
-      $('#profile-pic').src = e.target.result;
-      $$('.user-avatar').forEach(img => img.src = e.target.result);
-      const ca = document.getElementById('composer-avatar');
-      if (ca) ca.src = e.target.result;
+      const src = e.target.result;
+      // حفظ في localStorage
+      localStorage.setItem('cdz_user_photo', src);
+      // تحديث كل الصور الشخصية في التطبيق
+      syncAvatarEverywhere(src);
     };
     reader.readAsDataURL(file);
   });
+
+  function syncAvatarEverywhere(src) {
+    if (!src) return;
+    // صفحة الملف الشخصي
+    const profilePic = document.getElementById('profile-pic');
+    if (profilePic) profilePic.src = src;
+    // كل .user-avatar
+    document.querySelectorAll('.user-avatar').forEach(img => { img.src = src; });
+    // محرر المنشورات
+    const ca = document.getElementById('composer-avatar');
+    if (ca) ca.src = src;
+    // الشريط الجانبي
+    const wheelAvatar = document.getElementById('wheel-profile-avatar');
+    if (wheelAvatar) wheelAvatar.src = src;
+    const centerPic = document.getElementById('wheel-center-pic');
+    if (centerPic) centerPic.src = src;
+    const wa0Avatar = document.getElementById('wa-avatar-0');
+    if (wa0Avatar) wa0Avatar.src = src;
+    // عالم المدينة
+    const wcbAv = document.getElementById('wcb-avatar');
+    if (wcbAv) wcbAv.src = src;
+    // كارت العضوية
+    const memberCardImg = document.getElementById('member-card-mini-img');
+    if (memberCardImg) memberCardImg.src = src;
+    // البطاقة البنكية
+    const bankMiniAvatar = document.querySelector('.card-bank .mini-avatar');
+    if (bankMiniAvatar) bankMiniAvatar.src = src;
+    // نافذة "كيف يراك الآخرون"
+    const vaoAvatar = document.querySelector('.vao-avatar');
+    if (vaoAvatar) vaoAvatar.src = src;
+    // صورة إنشاء التعليقات
+    document.querySelectorAll('#fs-comments-overlay img[style*="border-radius:50%"]').forEach(img => { img.src = src; });
+    // تحديث الحساب الأول في savedAccounts
+    if (typeof savedAccounts !== 'undefined' && savedAccounts.length > 0) {
+      savedAccounts[0].avatar = src;
+    }
+  }
 
 
   // ── JS: CREATE POST CLICK ────────────────────────────────────
@@ -7800,6 +7956,35 @@ if (document.readyState === 'loading') {
     showToast('تم حذف القصة');
   }
 
+  // ── إضافة موسيقى للقصة أثناء المشاهدة ──
+  window.svAddMusicToStory = function() {
+    const inp = document.getElementById('sv-music-input');
+    if (inp) inp.click();
+  };
+
+  window.svLoadStoryMusic = function(input) {
+    const file = input.files[0]; if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.mp3') && !file.type.includes('audio')) {
+      showToast('⚠️ يُقبل فقط ملفات MP3 أو صوتية'); return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      const story = gostaStories[svCurrentIndex]; if (!story) return;
+      story.musicData = e.target.result;
+      story.musicName = file.name.replace(/\.[^.]+$/, '');
+      // تشغيل الموسيقى فوراً
+      const audio = document.getElementById('sv-story-audio');
+      if (audio) { audio.src = e.target.result; audio.play().catch(()=>{}); }
+      if (svAudio) svAudio.pause();
+      svAudio = audio;
+      const mb = $('#sv-music-bar');
+      if (mb) { mb.classList.add('show'); $('#sv-music-name').textContent = story.musicName; }
+      showToast('🎵 تم إضافة الموسيقى!');
+    };
+    reader.readAsDataURL(file);
+    input.value = '';
+  };
+
   // Also allow clicking static demo story cards
   $$('.story-card:not(.add-story):not(.dynamic-story)').forEach(card => {
     card.addEventListener('click', () => {
@@ -7876,7 +8061,147 @@ if (document.readyState === 'loading') {
   }
 
   function addNewAccount() {
-    showToast('🔐 ميزة إضافة حساب جديد قريباً!');
+    openAddAccountPanel();
+  }
+
+  window.openAddAccountPanel = function() {
+    const panel = document.getElementById('add-account-panel');
+    if (panel) {
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      if (panel.style.display === 'block') {
+        document.getElementById('add-acct-email')?.focus();
+      }
+    }
+  };
+
+  window.closeAddAccountPanel = function() {
+    const panel = document.getElementById('add-account-panel');
+    if (panel) panel.style.display = 'none';
+    const msg = document.getElementById('add-acct-msg');
+    if (msg) msg.textContent = '';
+    const emailEl = document.getElementById('add-acct-email');
+    const passEl  = document.getElementById('add-acct-pass');
+    if (emailEl) emailEl.value = '';
+    if (passEl)  passEl.value  = '';
+  };
+
+  window.doAddAccount = async function() {
+    const emailEl = document.getElementById('add-acct-email');
+    const passEl  = document.getElementById('add-acct-pass');
+    const msgEl   = document.getElementById('add-acct-msg');
+    const email   = (emailEl?.value || '').trim().toLowerCase();
+    const pass    = (passEl?.value  || '').trim();
+
+    if (!email || !pass) { if (msgEl) msgEl.textContent = '⚠️ أدخل البريد وكلمة السر'; return; }
+    if (msgEl) msgEl.textContent = '⏳ جارٍ التحقق...';
+
+    try {
+      const sheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
+      const res = await fetch(sheetUrl + '&t=' + Date.now());
+      if (!res.ok) throw new Error('net');
+      const csv = await res.text();
+      const rows = csv.trim().split('\n');
+      const headers = rows[0].split(',').map(h => h.replace(/"/g,'').trim().toLowerCase());
+      let emailIdx = headers.findIndex(h => h.includes('email') || h.includes('mail') || h.includes('إيميل'));
+      if (emailIdx < 0) emailIdx = 1;
+
+      let found = null;
+      for (let i = 1; i < rows.length; i++) {
+        const cols = rows[i].split(',');
+        const rowEmail = (cols[emailIdx] || '').replace(/"/g,'').trim().toLowerCase();
+        if (rowEmail === email) {
+          found = cols;
+          break;
+        }
+      }
+
+      if (!found) {
+        if (msgEl) msgEl.textContent = '❌ هذا الإيميل غير مسجل';
+        return;
+      }
+
+      const name   = (found[2]  || '').replace(/"/g,'').trim() || email.split('@')[0];
+      const photo  = (found[7]  || '').replace(/"/g,'').trim() || '';
+      const cat    = (found[9]  || '').replace(/"/g,'').trim() || '';
+      const points = (found[21] || '0').replace(/[^\d]/g,'') || '0';
+
+      const defaultAvatar = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(name) + '&background=1a6dff&color=fff&size=80';
+      const avatarSrc = photo || defaultAvatar;
+
+      // حفظ الحساب الحالي أولاً في savedAccounts
+      const currentEmail = localStorage.getItem('cdz_user_email') || '';
+      const currentName  = localStorage.getItem('cdz_user_display') || '';
+      const currentPhoto = localStorage.getItem('cdz_user_photo') || '';
+      const currentCat   = localStorage.getItem('cdz_user_cat') || '';
+      const currentPts   = localStorage.getItem('cdz_user_points') || '0';
+
+      if (currentEmail && savedAccounts.findIndex(a => a.email === currentEmail) < 0) {
+        const defAv = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(currentName) + '&background=1a6dff&color=fff&size=80';
+        savedAccounts.unshift({
+          email: currentEmail, name: currentName.split(' ')[0] || currentName,
+          fullName: currentName, avatar: currentPhoto || defAv, cat: currentCat, points: currentPts
+        });
+      }
+
+      // إضافة الحساب الجديد
+      const alreadyExists = savedAccounts.findIndex(a => a.email === email);
+      const newAcct = { email, name: name.split(' ')[0] || name, fullName: name, avatar: avatarSrc, cat, points };
+
+      if (alreadyExists >= 0) {
+        savedAccounts[alreadyExists] = newAcct;
+      } else {
+        savedAccounts.push(newAcct);
+      }
+
+      // تسجيل الدخول بالحساب الجديد
+      localStorage.setItem('cdz_logged_in',    '1');
+      localStorage.setItem('cdz_user_email',   email);
+      localStorage.setItem('cdz_user_display', name);
+      localStorage.setItem('cdz_user_photo',   photo);
+      localStorage.setItem('cdz_user_cat',     cat);
+      localStorage.setItem('cdz_user_points',  points);
+
+      if (msgEl) msgEl.textContent = '✅ تم حفظ الحساب وتسجيل الدخول!';
+
+      // تحديث الواجهة
+      renderSavedAccounts();
+      closeAddAccountPanel();
+      setTimeout(() => {
+        applyUserDataToApp();
+        closeWheelMenu();
+        showToast('✅ مرحباً ' + name.split(' ')[0] + '! تم تبديل الحساب');
+      }, 800);
+
+    } catch(e) {
+      if (msgEl) msgEl.textContent = '⚠️ تعذّر الاتصال. تحقق من الإنترنت';
+    }
+  };
+
+  function renderSavedAccounts() {
+    const list = document.getElementById('wheel-accounts-list');
+    if (!list) return;
+    // احتفظ بزر الإضافة
+    const addBtn = document.getElementById('add-account-btn');
+    const addPanel = document.getElementById('add-account-panel');
+
+    list.innerHTML = '';
+
+    savedAccounts.forEach((acct, idx) => {
+      const item = document.createElement('div');
+      item.className = 'wheel-account-item' + (idx === currentAccountIdx ? ' active-acct' : '');
+      item.onclick = () => switchAccount(idx);
+      item.innerHTML = `
+        <div class="wheel-account-avatar-wrap">
+          <img src="${acct.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(acct.name) + '&background=1a6dff&color=fff&size=80'}" id="wa-avatar-${idx}" alt="" />
+          ${idx === currentAccountIdx ? '<div class="wheel-account-active-dot"></div>' : ''}
+        </div>
+        <div class="wheel-account-name" id="wa-name-${idx}">${acct.name || ''}</div>`;
+      list.appendChild(item);
+    });
+
+    // أعد إضافة زر الإضافة ولوحته
+    if (addBtn) list.appendChild(addBtn);
+    if (addPanel) list.appendChild(addPanel);
   }
 
   // --- Settings Modal ---
@@ -8365,6 +8690,41 @@ if (document.readyState === 'loading') {
     document.body.appendChild(mo);
     mo.addEventListener('click', e => { if (e.target === mo) mo.remove(); });
   }
+
+  // --- Member Profile Modal (click on avatar/name) ---
+  window.openMemberProfileModal = function(m) {
+    if (!m || !m.name) return;
+    const existing = document.getElementById('member-profile-quick-modal');
+    if (existing) existing.remove();
+    const age = m.dob ? calcAge(m.dob) : null;
+    const photo = m.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&background=1a6dff&color=fff&size=200`;
+    const pts = (m.pts || 0).toLocaleString('ar-DZ');
+    const mo = document.createElement('div');
+    mo.id = 'member-profile-quick-modal';
+    mo.style.cssText = 'position:fixed;inset:0;z-index:9900;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center';
+    mo.innerHTML = `
+      <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:430px;padding:0 0 32px;animation:slideUp .3s ease">
+        <div style="background:linear-gradient(135deg,#1a6dff,#6366f1);height:100px;border-radius:24px 24px 0 0;position:relative">
+          <button onclick="document.getElementById('member-profile-quick-modal').remove()" style="position:absolute;top:12px;left:12px;background:rgba(255,255,255,.2);border:none;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:.9rem;display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;margin-top:-48px;padding:0 20px">
+          <img src="${photo}" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&background=1a6dff&color=fff&size=200'"
+            style="width:96px;height:96px;border-radius:50%;border:4px solid #fff;object-fit:cover;box-shadow:0 4px 20px rgba(0,0,0,.18)" />
+          <div style="font-family:var(--font-main);font-weight:900;font-size:1.1rem;color:#1c1e21;margin-top:10px">${m.name}</div>
+          ${m.category ? `<span style="background:#e8f0ff;color:#1a6dff;font-family:var(--font-main);font-size:.72rem;font-weight:800;padding:3px 10px;border-radius:999px;margin-top:4px">${m.category}</span>` : ''}
+          <div style="display:flex;gap:16px;margin-top:14px">
+            ${age !== null ? `<div style="text-align:center"><div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:#1c1e21">${age}</div><div style="font-size:.7rem;color:#65676b;font-family:var(--font-main)">سنة</div></div>` : ''}
+            <div style="text-align:center"><div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:#f59e0b">${pts}</div><div style="font-size:.7rem;color:#65676b;font-family:var(--font-main)">نقطة</div></div>
+          </div>
+          <button onclick="document.getElementById('member-profile-quick-modal').remove()"
+            style="margin-top:20px;width:100%;padding:13px;background:linear-gradient(135deg,#1a6dff,#6366f1);color:#fff;border:none;border-radius:14px;font-family:var(--font-main);font-size:.92rem;font-weight:800;cursor:pointer">
+            <i class="fa-solid fa-message" style="margin-left:6px"></i> مراسلة
+          </button>
+        </div>
+      </div>`;
+    mo.addEventListener('click', e => { if (e.target === mo) mo.remove(); });
+    document.body.appendChild(mo);
+  };
 
   // --- Logout ---
   function doLogout() {
@@ -9351,12 +9711,17 @@ if (document.readyState === 'loading') {
       const photo = m.photo || m.photo_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(m.name)}`;
       const pts = (m.pts || 0).toLocaleString('ar-DZ');
       const id = 'fsugg-dyn-' + i;
+      // استنتاج السن من تاريخ الميلاد
+      const age = m.dob ? calcAge(m.dob) : null;
+      const ageHtml = age !== null ? `<div class="fcs-mutual" style="color:#6366f1"><i class="fa-solid fa-cake-candles"></i> ${age} سنة</div>` : '';
       return `
         <div class="friend-card-sugg" id="${id}">
           <img src="${photo}" alt="${m.name}"
             onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(m.name)}'"
-            style="width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm)" />
+            style="width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm);cursor:pointer"
+            onclick="openMemberProfileModal(${JSON.stringify({name:m.name,photo:photo,pts:m.pts||0,dob:m.dob||null,category:m.category||''}).replace(/"/g,'&quot;')})" />
           <div class="fcs-name">${m.name}</div>
+          ${ageHtml}
           <div class="fcs-mutual"><i class="fa-solid fa-star" style="color:#f59e0b"></i> ${pts} نقطة</div>
           <button class="fcs-add" onclick="addFriend('${id}',this)"><i class="fa-solid fa-user-plus"></i> إضافة صديق</button>
           <button class="fcs-remove" onclick="removeSugg('${id}')">إزالة</button>
@@ -9488,34 +9853,67 @@ if (document.readyState === 'loading') {
   // بيانات المبتدئ الحقيقية — تُحمَّل من Google Sheet
   let beginnersDivisionData = null;
 
+  // ── حساب النقاط الإجمالية: تفاعل + كويز + جدول ──
+  function getTotalPointsForUser(memberName) {
+    // نقاط الجدول
+    const memberData = MEMBERS_CSV_DATA.find(m => m.name === memberName);
+    const sheetPts = memberData ? (memberData.pts || 0) : 0;
+
+    // نقاط التفاعل والكويز (فقط للمستخدم الحالي)
+    const currentUser = localStorage.getItem('cdz_user_display') || window._cdz_current_user_name || '';
+    let interactPts = 0;
+    let quizPts = 0;
+    if (memberName === currentUser) {
+      interactPts = window.userInteractPts || 0;
+      try {
+        const prog = JSON.parse(localStorage.getItem('quizLevelProgress') || '{}');
+        Object.values(prog).forEach(lv => { quizPts += (lv.earnedPts || 0); });
+      } catch(e) {}
+    }
+    return sheetPts + interactPts + quizPts;
+  }
+
   async function loadBeginnersDivision() {
     const body = $('#tourn-table-body');
     if (!body) return;
     body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-family:var(--font-main)"><i class="fa-solid fa-spinner fa-spin"></i> جارٍ التحميل...</div>';
 
+    // جلب البيانات من Google Sheets مباشرة
     try {
-      // جرّب Supabase أولًا
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/members?select=name,points,photo_url&order=points.desc`, {
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-      });
+      const sheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
+      const res = await fetch(sheetUrl + '&t=' + Date.now());
       if (res.ok) {
-        const data = await res.json();
-        if (data && data.length > 0) {
-          beginnersDivisionData = data.map(d => ({
-            name: d.name || '',
-            pts: d.points || 0,
-            photo: d.photo_url || null
-          }));
-          renderBeginnerDivision();
-          return;
+        const csv = await res.text();
+        const rows = csv.trim().split('\n');
+        if (rows.length >= 2) {
+          const parsed = [];
+          for (let i = 1; i < rows.length; i++) {
+            const cols = parseCSVRowMembers(rows[i].trim());
+            const name  = (cols[2] || '').replace(/"/g,'').trim();
+            if (!name) continue;
+            const dob   = (cols[3] || '').replace(/"/g,'').trim();
+            const photo = (cols[7] || '').replace(/"/g,'').trim() || null;
+            const pts   = parseInt((cols[21] || '0').replace(/[^\d]/g,'')) || 0;
+            parsed.push({ name, dob, pts, photo });
+          }
+          if (parsed.length > 0) {
+            MEMBERS_CSV_DATA = parsed.map(p => ({ ...p, category: '', rank: '', email: '' }));
+            allMembers = [...MEMBERS_CSV_DATA];
+            filteredMembers = [...allMembers];
+            beginnersDivisionData = [...parsed]
+              .sort((a, b) => (getTotalPointsForUser(b.name)||0) - (getTotalPointsForUser(a.name)||0))
+              .map(d => ({ name: d.name, pts: getTotalPointsForUser(d.name), photo: d.photo || null, dob: d.dob || null }));
+            renderBeginnerDivision();
+            return;
+          }
         }
       }
     } catch(e) {}
 
-    // fallback: بيانات CSV المحلية مرتبة حسب النقاط
+    // fallback: بيانات CSV المحلية مرتبة حسب النقاط الإجمالية
     beginnersDivisionData = [...MEMBERS_CSV_DATA]
-      .sort((a, b) => (b.pts || 0) - (a.pts || 0))
-      .map(d => ({ name: d.name, pts: d.pts || 0, photo: d.photo || null }));
+      .sort((a, b) => (getTotalPointsForUser(b.name) || 0) - (getTotalPointsForUser(a.name) || 0))
+      .map(d => ({ name: d.name, pts: getTotalPointsForUser(d.name), photo: d.photo || null, dob: d.dob || null }));
     renderBeginnerDivision();
   }
 
@@ -9535,9 +9933,12 @@ if (document.readyState === 'loading') {
       const isPromo = i < 10;
       const row = document.createElement('div');
       row.className = 'tourn-row' + (p.isMe ? ' is-me' : '') + (isPromo ? ' promo-zone' : '');
+      row.style.cursor = 'pointer';
       let rankClass = p.rank === 1 ? 'gold' : p.rank === 2 ? 'silver' : p.rank === 3 ? 'bronze' : '';
       const trendIcon = isPromo ? '<i class="fa-solid fa-arrow-up"></i>' : '<i class="fa-solid fa-minus"></i>';
       const avatarSrc = p.photo || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.name)}`;
+      // استنتاج السن من تاريخ الميلاد
+      const ageStr = p.dob ? (() => { const age = calcAge(p.dob); return age !== null ? ` · ${age} سنة` : ''; })() : '';
       row.innerHTML = `
         <span class="tourn-rank ${rankClass}">${p.rank === 1 ? '🥇' : p.rank === 2 ? '🥈' : p.rank === 3 ? '🥉' : p.rank}</span>
         <div class="tourn-player">
@@ -9545,11 +9946,15 @@ if (document.readyState === 'loading') {
             onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.name)}'" />
           <div>
             <div class="tourn-player-name">${p.name}${p.isMe ? ' 👤' : ''}</div>
-            <div class="tourn-player-div">المبتدئ</div>
+            <div class="tourn-player-div">المبتدئ${ageStr}</div>
           </div>
         </div>
         <div class="tourn-pts">${(p.pts || 0).toLocaleString('ar-DZ')}</div>
         <div class="tourn-trend ${isPromo ? 'up' : 'stable'}">${trendIcon}</div>`;
+      // الضغط على الصف يفتح الملف الشخصي
+      row.addEventListener('click', () => {
+        if (p.isMe) { navigateTo('profile'); } else { openMemberProfileModal(p); }
+      });
       body.appendChild(row);
     });
 
@@ -9557,7 +9962,7 @@ if (document.readyState === 'loading') {
     if (rules) {
       rules.innerHTML = `
         <strong>القسم المبتدئ</strong> — جميع المنخرطين المسجلين<br>
-        🟢 الصعود: أفضل <strong>10</strong> لاعبين يصعدون إلى القسم الهاوي كل خميس 21:00<br>
+        🟢 الصعود: أفضل <strong>10</strong> لاعبين يصعدون إلى القسم الهاوي كل خميس 22:00<br>
         📊 الترتيب حسب النقاط الإجمالية من جدول البيانات
       `;
     }
@@ -9848,40 +10253,66 @@ if (document.readyState === 'loading') {
   const SUPABASE_URL = 'https://wgzinbjwkmgobenyhsvz.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_QwzwrJR6QKN2eZ9CAnLFQQ_U7suNWeq';
 
-  const MEMBERS_CSV_DATA = [
-    { name: 'عياد سلسبيل', dob: '2012-08-13', gender: 'أنثى', category: 'طفل',  rank: 'برعم مبتكر',           pts: 95,   photo: 'https://drive.google.com/thumbnail?id=1QCJthOwGBYWQbXcgSS99YyzJyG7Ydxcy' },
-    { name: 'حمودي محمد الأمين', dob: '2006-03-23', gender: 'ذكر', category: 'شاب', rank: 'قائد شاب',           pts: 120,  photo: 'https://drive.google.com/thumbnail?id=1o71gGbSjgnkWe3w6uIsn_dRChN_EU6Xz' },
-    { name: 'راجع ياسين', dob: '2014-01-19', gender: 'ذكر', category: 'طفل',  rank: 'قائد شاب',               pts: 70000,photo: 'https://drive.google.com/thumbnail?id=14-EIJkhgu-nLG_Y8TfSYWOyJx5okb6-_' },
-    { name: 'بوكلي اسمهان', dob: '1987-02-24', gender: 'أنثى', category: 'شاب', rank: 'رائد التنفيذ',          pts: 75,   photo: 'https://drive.google.com/thumbnail?id=1QNICWjxR-VtKOcmU7suNWeq' },
-    { name: 'بالغ شيماء', dob: '2001-03-07', gender: 'أنثى', category: 'شاب', rank: 'قائد حامل للشارة القيادية', pts: 70,  photo: 'https://drive.google.com/thumbnail?id=1cMXgb4BrusRZmxO-uz3sC0Ny-f4mfLSG' },
-    { name: 'يحي ديش', dob: '1991-08-06', gender: 'ذكر', category: 'شاب', rank: 'رائد',                       pts: 1783, photo: 'https://drive.google.com/thumbnail?id=11-oBHhYzHkmHeCsRsGfeeMeGmYx-GLyJ' },
-    { name: 'حمودي عبد الغاني', dob: '2010-04-06', gender: 'ذكر', category: 'طفل', rank: 'bud',               pts: 0,    photo: 'https://drive.google.com/thumbnail?id=15RS7v8rB6kUz88FcfBkFAT96Lhei4o8v' },
-    { name: 'اسراء سفيسيفي', dob: '2015-02-11', gender: 'أنثى', category: 'طفل', rank: 'قائد مبتدئ',          pts: 50,   photo: 'https://drive.google.com/thumbnail?id=17LlY9RowCyo0Dkt1lq2UPodvSpY4dlUm' },
-    { name: 'أنس سفيسيفي', dob: '2013-03-27', gender: 'ذكر', category: 'طفل', rank: 'قائد مبتدئ',             pts: 50,   photo: 'https://drive.google.com/thumbnail?id=1kPk7cg7uTgRbxT--YiHkVRhXbBzfCb2K' },
-    { name: 'Kemouche douaa chaimae', dob: '2012-05-24', gender: 'أنثى', category: 'شاب', rank: '',            pts: 0,    photo: 'https://drive.google.com/thumbnail?id=1UfCPOi1r9IFczifbU2Aea8iTv0ryoMyh' },
-    { name: 'منال كازي اول', dob: '2003-12-14', gender: 'أنثى', category: 'شاب', rank: '',                    pts: 0,    photo: 'https://drive.google.com/thumbnail?id=1Odg-J1lsOVZKxdBE41ro1CUazZ8mh5mL' },
-    { name: 'ابتسام عشعاشي', dob: '1993-03-12', gender: 'أنثى', category: 'شاب', rank: '',                    pts: 0,    photo: null },
-    { name: 'عبد المنعم زكراوي', dob: '2007-11-05', gender: 'ذكر', category: 'شاب', rank: '',                  pts: 75,   photo: null },
-    { name: 'بشرى بن موسى', dob: '2001-12-12', gender: 'أنثى', category: 'شاب', rank: '',                     pts: 111,  photo: null },
-    { name: 'بن قدور ايمان', dob: '1987-12-30', gender: 'أنثى', category: 'شاب', rank: '',                    pts: 201,  photo: 'https://drive.google.com/thumbnail?id=1tFgyJwHf0m2iSNtRaE9aBd0eSjAmbv53' },
-    { name: 'شيماء طبال', dob: '2005-03-19', gender: 'أنثى', category: 'شاب', rank: '',                       pts: 180,  photo: null },
-    { name: 'سمير العيسوف', dob: '2001-07-13', gender: 'ذكر', category: 'شاب', rank: '',                      pts: 90,   photo: null },
-    { name: 'ايمان جلطي', dob: '2009-01-27', gender: 'أنثى', category: 'طفل', rank: '',                       pts: 85,   photo: null },
-    { name: 'Hamoudi Abdelemouman13', dob: '2007-09-11', gender: 'ذكر', category: 'شاب', rank: '',             pts: 103,  photo: null },
-    { name: 'جيلالي مبروك', dob: '1982-03-17', gender: 'ذكر', category: 'شاب', rank: '',                      pts: 120,  photo: null },
-    { name: 'هدايات لوزاني', dob: '2011-09-14', gender: 'ذكر', category: 'طفل', rank: '',                     pts: 75,   photo: null },
-    { name: 'تاج الدين بن منصور', dob: null, gender: 'ذكر', category: 'شاب', rank: '',                         pts: 105,  photo: null },
-    { name: 'حمودي فتح الله', dob: null, gender: 'ذكر', category: 'طفل', rank: '',                             pts: 95,   photo: null },
-    { name: 'سفيسيفي شيماء', dob: null, gender: 'أنثى', category: 'شاب', rank: '',                            pts: 130,  photo: null },
-    { name: 'اناس مصمودي', dob: null, gender: 'ذكر', category: 'شاب', rank: '',                                pts: 0,    photo: null },
-    { name: 'حمزة طرشاوي', dob: null, gender: 'ذكر', category: 'شاب', rank: '',                                pts: 75,   photo: null },
-    { name: 'لميس شحاب', dob: null, gender: 'أنثى', category: 'شاب', rank: '',                                 pts: 65,   photo: null },
-    { name: 'احمد الياس عياد', dob: null, gender: 'ذكر', category: 'طفل', rank: '',                            pts: 100,  photo: null },
-    { name: 'تواتي سميرة', dob: null, gender: 'أنثى', category: 'شاب', rank: '',                               pts: 50,   photo: null },
-  ];
+  // ═══════════════════════════════════════════════════════════════
+  // MEMBERS_CSV_DATA — يُجلب من Google Sheets مباشرة
+  // البيانات الثابتة أدناه هي فقط fallback في حال فشل الجلب
+  // ═══════════════════════════════════════════════════════════════
+  let MEMBERS_CSV_DATA = [];
 
-  let allMembers = [...MEMBERS_CSV_DATA];
-  let filteredMembers = [...allMembers];
+  // جلب الأعضاء من Google Sheets وتحديث القائمة
+  async function fetchMembersFromSheet() {
+    const sheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS8sNG3xyNeBE4d3WVgjvA2tJ51t9eXJcqdcujS_61A79VAQaQS-9zc6i1CgILmZMOgh8BnFA7lkave/pub?gid=1279805773&single=true&output=csv';
+    try {
+      const res = await fetch(sheetUrl + '&t=' + Date.now());
+      if (!res.ok) throw new Error('fetch_failed');
+      const csv = await res.text();
+      const allRows = csv.trim().split('\n');
+      if (allRows.length < 2) return;
+
+      const parsed = [];
+      for (let i = 1; i < allRows.length; i++) {
+        const line = allRows[i].trim();
+        if (!line) continue;
+        const cols = parseCSVRowMembers(line);
+        const email = (cols[1] || '').replace(/"/g,'').trim().toLowerCase();
+        if (!email) continue;
+        const name   = (cols[2]  || '').replace(/"/g,'').trim();
+        if (!name) continue;
+        const dob    = (cols[3]  || '').replace(/"/g,'').trim() || null;
+        const photo  = (cols[7]  || '').replace(/"/g,'').trim() || null;
+        const cat    = (cols[9]  || '').replace(/"/g,'').trim() || 'شاب';
+        const rank   = (cols[8]  || '').replace(/"/g,'').trim() || '';
+        const sheetPts = parseInt((cols[21] || '0').replace(/[^\d]/g,'')) || 0;
+        parsed.push({ name, dob, gender: '', category: cat, rank, pts: sheetPts, email, photo });
+      }
+      if (parsed.length > 0) {
+        MEMBERS_CSV_DATA = parsed;
+        allMembers = [...MEMBERS_CSV_DATA];
+        filteredMembers = [...allMembers];
+        if (typeof renderMembersGrid === 'function') renderMembersGrid();
+        // تحديث بيانات البطولة
+        if (typeof renderBeginnerDivision === 'function') renderBeginnerDivision();
+      }
+    } catch(e) {
+      console.warn('Members sheet fetch failed:', e);
+    }
+  }
+
+  function parseCSVRowMembers(row) {
+    const result = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    result.push(cur.trim());
+    return result;
+  }
+
+  let allMembers = [];
+  let filteredMembers = [];
   let currentCategoryFilter = 'الكل';
 
   function calcAge(dob) {
@@ -9913,7 +10344,9 @@ if (document.readyState === 'loading') {
     const catLabel = m.category || '';
     const catInitial = catLabel ? catLabel[0] : '؟';
     return `
-      <div class="member-item" data-cat="${m.category}" data-name="${m.name}">
+      <div class="member-item" data-cat="${m.category}" data-name="${m.name}"
+        onclick="openMemberProfileModal(${JSON.stringify({name:m.name,photo:avatarSrc,pts:m.pts||0,dob:m.dob||null,category:m.category||''}).replace(/"/g,'&quot;')})"
+        style="cursor:pointer">
         <div class="member-avatar-wrap">
           <img class="member-avatar" src="${avatarSrc}" alt="${m.name}"
             onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(m.name)}'" />
@@ -10562,7 +10995,7 @@ if (document.readyState === 'loading') {
     }
     if (page === 'members' && !membersLoaded) {
       membersLoaded = true;
-      setTimeout(initMembersPage, 200);
+      fetchMembersFromSheet().then(() => setTimeout(initMembersPage, 200));
     }
     if (page === 'quiz') {
       if (!quizLoaded) { quizLoaded = true; }
@@ -13938,6 +14371,8 @@ window.doLogin = async function() {
           document.getElementById('login-screen')?.classList.add('hidden');
           applyAppLang(loginCurrentLang);
           applyUserDataToApp();
+          // تحميل الأعضاء من الجدول فوراً
+          if (typeof fetchMembersFromSheet === 'function') fetchMembersFromSheet();
         }, 1400);
         break;
       }
@@ -13968,21 +14403,23 @@ window.applyUserDataToApp = function() {
   const defaultAvatar = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(name) + '&background=1a6dff&color=fff&size=200';
   const avatarSrc = photo || defaultAvatar;
 
+  // ── استعادة صورة الغلاف ──
+  const savedCover = localStorage.getItem('cdz_cover_photo');
+  if (savedCover) {
+    const coverImg = document.getElementById('cover-img');
+    if (coverImg) coverImg.src = savedCover;
+  }
+
   // ── الصورة الشخصية في كل مكان ──
-  const profilePic = document.getElementById('profile-pic');
-  if (profilePic) profilePic.src = avatarSrc;
-
-  document.querySelectorAll('.user-avatar').forEach(img => { img.src = avatarSrc; });
-
-  const composerAvatar = document.getElementById('composer-avatar');
-  if (composerAvatar) composerAvatar.src = avatarSrc;
-
-  const memberCardImg = document.getElementById('member-card-mini-img');
-  if (memberCardImg) memberCardImg.src = avatarSrc;
-
-  // البطاقة البنكية - صورة صغيرة
-  const bankMiniAvatar = document.querySelector('.card-bank .mini-avatar');
-  if (bankMiniAvatar) bankMiniAvatar.src = avatarSrc;
+  if (typeof syncAvatarEverywhere === 'function') {
+    syncAvatarEverywhere(avatarSrc);
+  } else {
+    const profilePic = document.getElementById('profile-pic');
+    if (profilePic) profilePic.src = avatarSrc;
+    document.querySelectorAll('.user-avatar').forEach(img => { img.src = avatarSrc; });
+    const composerAvatar = document.getElementById('composer-avatar');
+    if (composerAvatar) composerAvatar.src = avatarSrc;
+  }
 
   // ── الاسم في كل مكان ──
   const profileNameH1 = document.querySelector('#profile-page .profile-name-section h1');
@@ -14023,10 +14460,19 @@ window.applyUserDataToApp = function() {
     if (catEl) { catEl.textContent = cat; catEl.style.display = 'inline-block'; }
   }
 
-  // ── السن ──
+  // ── السن — استنتاج السن من تاريخ الميلاد أو عرض مباشر ──
   if (age) {
     const ageEl = document.getElementById('profile-user-age');
-    if (ageEl) { ageEl.textContent = 'العمر: ' + age + ' سنة'; ageEl.style.display = 'block'; }
+    if (ageEl) {
+      // إذا كان تاريخ ميلاد (يحتوي على -)، احسب السن
+      let displayAge = age;
+      if (age.includes('-') || age.includes('/')) {
+        const computed = calcAge ? calcAge(age) : null;
+        if (computed !== null) displayAge = computed;
+      }
+      ageEl.textContent = 'العمر: ' + displayAge + ' سنة';
+      ageEl.style.display = 'block';
+    }
   }
 
   // ── النقاط ──
@@ -14396,6 +14842,15 @@ window.fsToggleLike = async function(postId, btn) {
   const uid = window._cdz_uid;
   if (!uid) return;
 
+  // تغيير مؤقت فوري في الواجهة
+  const wasLiked = btn.classList.contains('liked');
+  btn.classList.toggle('liked', !wasLiked);
+  const icon = btn.querySelector('i');
+  if (icon) icon.className = `fa-${!wasLiked ? 'solid' : 'regular'} fa-thumbs-up`;
+  // تأثير نبضة
+  btn.style.transform = 'scale(1.2)';
+  setTimeout(() => { btn.style.transform = 'scale(1)'; }, 180);
+
   const ref   = doc(db, "posts", postId);
   const snap  = await getDoc(ref);
   if (!snap.exists()) return;
@@ -14464,14 +14919,41 @@ window.fsOpenComments = async function(postId) {
       cmtSnap.forEach(c => {
         const d = c.data();
         const cmtEl = document.createElement("div");
-        cmtEl.style.cssText = "display:flex;gap:8px;margin-bottom:12px;align-items:flex-start";
+        cmtEl.dataset.cmtId = c.id;
+        cmtEl.style.cssText = "margin-bottom:14px";
         const av = d.authorPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(d.authorName||"?")}&background=1a6dff&color=fff&size=40`;
+        const myUid = window._cdz_uid || '';
+        const cmtLikes = d.likes || [];
+        const iLikedCmt = cmtLikes.includes(myUid);
         cmtEl.innerHTML = `
-          <img src="${av}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
-          <div style="background:#f0f2f5;border-radius:14px;padding:8px 12px;flex:1;">
-            <div style="font-family:var(--font-main);font-size:.78rem;font-weight:800;color:#1c1e21;margin-bottom:2px">${escHtml(d.authorName||"عضو")}</div>
-            <div style="font-size:.85rem;color:#1c1e21;">${escHtml(d.text||"")}</div>
-            <div style="font-size:.65rem;color:#65676b;margin-top:4px;">${d.createdAt?.toDate ? formatTime(d.createdAt.toDate()) : "الآن"}</div>
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <img src="${av}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
+            <div style="flex:1">
+              <div style="background:#f0f2f5;border-radius:14px;padding:8px 12px;">
+                <div style="font-family:var(--font-main);font-size:.78rem;font-weight:800;color:#1c1e21;margin-bottom:2px">${escHtml(d.authorName||"عضو")}</div>
+                <div style="font-size:.85rem;color:#1c1e21;">${escHtml(d.text||"")}</div>
+              </div>
+              <div class="cmt-actions">
+                <button class="cmt-action-btn ${iLikedCmt ? 'liked-cmt' : ''}"
+                  onclick="fsCmtLike('${postId}','${c.id}',this)">
+                  <i class="fa-${iLikedCmt ? 'solid' : 'regular'} fa-thumbs-up"></i>
+                  <span class="cmt-like-cnt">${cmtLikes.length > 0 ? cmtLikes.length : ''}</span>
+                  إعجاب
+                </button>
+                <button class="cmt-action-btn" onclick="fsCmtReply('${c.id}',this,'${escHtml(d.authorName||"عضو")}')">
+                  <i class="fa-regular fa-comment"></i> رد
+                </button>
+                <span style="font-size:.65rem;color:#65676b;">${d.createdAt?.toDate ? formatTime(d.createdAt.toDate()) : "الآن"}</span>
+              </div>
+              <div class="cmt-reply-box" id="reply-box-${c.id}">
+                <input class="cmt-reply-input" placeholder="ردّ على ${escHtml(d.authorName||"عضو")}..."
+                  onkeydown="if(event.key==='Enter')fsSubmitReply('${postId}','${c.id}',this)" />
+                <button class="cmt-reply-send" onclick="fsSubmitReply('${postId}','${c.id}',this.previousElementSibling)">
+                  <i class="fa-solid fa-paper-plane"></i>
+                </button>
+              </div>
+              <div class="cmt-replies" id="replies-${c.id}"></div>
+            </div>
           </div>`;
         list.appendChild(cmtEl);
       });
@@ -14508,14 +14990,36 @@ window.fsSendComment = async function(postId) {
       const empty = list.querySelector("div[style*='text-align:center']");
       if (empty) empty.remove();
       const av = photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1a6dff&color=fff&size=40`;
+      const tempId = 'tmp_' + Date.now();
       const cmtEl = document.createElement("div");
-      cmtEl.style.cssText = "display:flex;gap:8px;margin-bottom:12px;align-items:flex-start";
+      cmtEl.dataset.cmtId = tempId;
+      cmtEl.style.cssText = "margin-bottom:14px";
       cmtEl.innerHTML = `
-        <img src="${av}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
-        <div style="background:#f0f2f5;border-radius:14px;padding:8px 12px;flex:1;">
-          <div style="font-family:var(--font-main);font-size:.78rem;font-weight:800;color:#1c1e21;margin-bottom:2px">${escHtml(name)}</div>
-          <div style="font-size:.85rem;color:#1c1e21;">${escHtml(text)}</div>
-          <div style="font-size:.65rem;color:#65676b;margin-top:4px;">الآن</div>
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <img src="${av}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;" />
+          <div style="flex:1">
+            <div style="background:#f0f2f5;border-radius:14px;padding:8px 12px;">
+              <div style="font-family:var(--font-main);font-size:.78rem;font-weight:800;color:#1c1e21;margin-bottom:2px">${escHtml(name)}</div>
+              <div style="font-size:.85rem;color:#1c1e21;">${escHtml(text)}</div>
+            </div>
+            <div class="cmt-actions">
+              <button class="cmt-action-btn" onclick="fsCmtLike('${postId}','${tempId}',this)">
+                <i class="fa-regular fa-thumbs-up"></i> <span class="cmt-like-cnt"></span> إعجاب
+              </button>
+              <button class="cmt-action-btn" onclick="fsCmtReply('${tempId}',this,'${escHtml(name)}')">
+                <i class="fa-regular fa-comment"></i> رد
+              </button>
+              <span style="font-size:.65rem;color:#65676b;">الآن</span>
+            </div>
+            <div class="cmt-reply-box" id="reply-box-${tempId}">
+              <input class="cmt-reply-input" placeholder="ردّ على ${escHtml(name)}..."
+                onkeydown="if(event.key==='Enter')fsSubmitReply('${postId}','${tempId}',this)" />
+              <button class="cmt-reply-send" onclick="fsSubmitReply('${postId}','${tempId}',this.previousElementSibling)">
+                <i class="fa-solid fa-paper-plane"></i>
+              </button>
+            </div>
+            <div class="cmt-replies" id="replies-${tempId}"></div>
+          </div>
         </div>`;
       list.appendChild(cmtEl);
       list.scrollTop = list.scrollHeight;
@@ -14524,6 +15028,82 @@ window.fsSendComment = async function(postId) {
     inp.disabled = false;
     inp.focus();
   }
+};
+
+// ─── إعجاب بتعليق ───
+window.fsCmtLike = async function(postId, cmtId, btn) {
+  const uid = window._cdz_uid;
+  if (!uid || !btn) return;
+  const isLiked = btn.classList.toggle('liked-cmt');
+  const icon = btn.querySelector('i');
+  const cnt  = btn.querySelector('.cmt-like-cnt');
+  if (icon) icon.className = `fa-${isLiked ? 'solid' : 'regular'} fa-thumbs-up`;
+  if (cnt) {
+    const cur = parseInt(cnt.textContent || 0);
+    cnt.textContent = isLiked ? (cur + 1 || 1) : (cur - 1 <= 0 ? '' : cur - 1);
+  }
+  // تحديث Firestore إن أمكن
+  try {
+    if (!cmtId.startsWith('tmp_')) {
+      const ref = doc(db, "posts", postId, "comments", cmtId);
+      await updateDoc(ref, { likes: isLiked ? arrayUnion(uid) : arrayRemove(uid) });
+    }
+  } catch(e) {}
+};
+
+// ─── فتح/إغلاق صندوق الرد ───
+window.fsCmtReply = function(cmtId, btn, authorName) {
+  const box = document.getElementById('reply-box-' + cmtId);
+  if (!box) return;
+  const isOpen = box.classList.toggle('open');
+  if (isOpen) {
+    const inp = box.querySelector('.cmt-reply-input');
+    if (inp) { inp.value = ''; inp.focus(); }
+  }
+};
+
+// ─── إرسال رد على تعليق ───
+window.fsSubmitReply = async function(postId, cmtId, inp) {
+  if (!inp) return;
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  inp.disabled = true;
+
+  const name  = localStorage.getItem('cdz_user_display') || 'عضو';
+  const photo = localStorage.getItem('cdz_user_photo')   || '';
+  const av    = photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1a6dff&color=fff&size=40`;
+
+  // أضف الرد في الـ DOM
+  const repliesEl = document.getElementById('replies-' + cmtId);
+  if (repliesEl) {
+    const replyEl = document.createElement('div');
+    replyEl.className = 'cmt-reply-item';
+    replyEl.innerHTML = `
+      <img src="${av}" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1a6dff&color=fff&size=40'" />
+      <div class="cmt-reply-bubble">
+        <div class="cmt-reply-author">${escHtml(name)}</div>
+        <div class="cmt-reply-text">${escHtml(text)}</div>
+        <div class="cmt-reply-time">الآن</div>
+      </div>`;
+    repliesEl.appendChild(replyEl);
+    repliesEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // أغلق صندوق الرد
+  const box = document.getElementById('reply-box-' + cmtId);
+  if (box) box.classList.remove('open');
+
+  // حفظ في Firestore
+  try {
+    if (!cmtId.startsWith('tmp_') && window._cdz_uid) {
+      await addDoc(collection(db, "posts", postId, "comments", cmtId, "replies"), {
+        text, authorName: name, authorPhoto: photo,
+        uid: window._cdz_uid, createdAt: serverTimestamp()
+      });
+    }
+  } catch(e) {}
+  inp.disabled = false;
 };
 
 window.fsSharePost = function(postId) {
@@ -14628,6 +15208,23 @@ window.publishPost = async function() {
         uid: uid || "anon", likes: [], commentsCount: 0,
         createdAt: serverTimestamp()
       }).catch(()=>{});
+
+      // إضافة فورية لشبكة ومضة + شارة خضراء
+      const flashEntry = {
+        id: 'local_' + Date.now(),
+        dataUrl: videoUrl,
+        authorName: name,
+        authorAvatar: photo || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(name) + '&background=1a6dff&color=fff&size=80'),
+        publishedAt: Date.now(),
+        likes: 0, views: 0, comments: []
+      };
+      if (typeof addVideoToFlashGrid === 'function') addVideoToFlashGrid(flashEntry);
+      // شارة جديد على أيقونة ومضة
+      const badge = document.getElementById('flash-new-badge');
+      if (badge) badge.style.display = 'block';
+      localStorage.setItem('cdz_flash_new', '1');
+      // إضافة للقائمة المحلية
+      if (typeof flashVideos !== 'undefined') flashVideos.unshift(flashEntry);
     }
 
     // ── تحديث نقاط المستخدم (+5 لكل منشور) ──
@@ -14803,6 +15400,47 @@ async function updateLeaderboard() {
     if (html) tbody.innerHTML = html;
   } catch(e) { console.warn("Leaderboard:", e); }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  FLASH VIDEOS — تحميل فيديوهات ومضة من Firestore لجميع المستخدمين
+// ═══════════════════════════════════════════════════════════════
+async function loadFlashFromFirestore() {
+  try {
+    const q    = query(collection(db, "flash"), orderBy("createdAt", "desc"), limit(50));
+    const snap = await getDocs(q);
+    if (snap.empty) return;
+
+    snap.forEach(s => {
+      const d = s.data();
+      if (!d.videoUrl) return;
+      const entry = {
+        id: s.id,
+        dataUrl: d.videoUrl,
+        authorName: d.authorName || 'عضو',
+        authorAvatar: d.authorPhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(d.authorName||'U')}&background=1a6dff&color=fff&size=80`,
+        publishedAt: d.createdAt?.toMillis ? d.createdAt.toMillis() : Date.now(),
+        likes: (d.likes || []).length,
+        views: d.views || 0,
+        comments: [],
+        userLiked: false,
+        isOwn: d.uid === window._cdz_uid
+      };
+      // فقط أضف إن لم يكن موجوداً بالفعل
+      const existing = document.querySelector(`[data-flash-id="${s.id}"]`);
+      if (!existing && typeof addVideoToFlashGrid === 'function') {
+        addVideoToFlashGrid(entry);
+      }
+    });
+  } catch(e) { console.warn("loadFlashFromFirestore:", e); }
+}
+
+// تحميل فيديوهات ومضة عند فتح الصفحة
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-page]');
+  if (btn && btn.dataset.page === 'flash') {
+    setTimeout(loadFlashFromFirestore, 400);
+  }
+}, { once: false });
 
 // ═══════════════════════════════════════════════════════════════
 //  USER POST COUNT
@@ -15058,7 +15696,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       // نحتفظ بمرجع db و utils للاستخدام في PTR
       if (typeof db !== 'undefined') window._firestoreDB = db;
-      if (typeof query !== 'undefined')   window._firestoreUtils = { query, collection, orderBy, limit, getDocs };
+      if (typeof query !== 'undefined')   window._firestoreUtils = { query, collection, orderBy, limit, getDocs, where, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, increment, arrayUnion, arrayRemove, onSnapshot, serverTimestamp };
     } catch(e) {}
   }, 2000);
 });
@@ -15162,6 +15800,12 @@ window.openNewChatPanel = function() {
   panel.style.display = 'flex';
   renderNewChatUsers('');
   setTimeout(() => document.getElementById('new-chat-search')?.focus(), 200);
+  // تحديث قائمة الأعضاء من الجدول إن لم تكن محملة
+  if (typeof MEMBERS_CSV_DATA !== 'undefined' && MEMBERS_CSV_DATA.length === 0) {
+    if (typeof fetchMembersFromSheet === 'function') {
+      fetchMembersFromSheet().then(() => renderNewChatUsers(''));
+    }
+  }
 };
 
 window.closeNewChatPanel = function() {
@@ -15174,18 +15818,33 @@ function renderNewChatUsers(filter) {
   if (!list) return;
   const me = localStorage.getItem('cdz_user_email') || '';
   const fl = filter.trim().toLowerCase();
-  const filtered = REAL_USERS.filter(u =>
-    u.email !== me &&
-    (fl === '' || u.name.toLowerCase().includes(fl) || u.wilaya.toLowerCase().includes(fl))
+
+  // دمج REAL_USERS مع MEMBERS_CSV_DATA (المجلوب من الجدول)
+  let combinedUsers = [...(window.REAL_USERS || [])];
+  if (typeof MEMBERS_CSV_DATA !== 'undefined' && MEMBERS_CSV_DATA.length > 0) {
+    MEMBERS_CSV_DATA.forEach(m => {
+      if (!combinedUsers.find(u => u.name === m.name)) {
+        combinedUsers.push({
+          email: m.email || '', name: m.name, dob: m.dob || '',
+          photo: m.photo || '', cat: m.category || 'شاب', wilaya: 'تلمسان', points: m.pts || 0
+        });
+      }
+    });
+  }
+
+  const filtered = combinedUsers.filter(u =>
+    (u.email || '') !== me &&
+    (fl === '' || (u.name || '').toLowerCase().includes(fl) || (u.wilaya || '').toLowerCase().includes(fl))
   );
+
   if (!filtered.length) {
     list.innerHTML = '<div style="padding:30px;text-align:center;color:#65676b;font-family:var(--font-main);font-size:.85rem">لا يوجد نتائج</div>';
     return;
   }
   list.innerHTML = filtered.map(u => {
-    const av = getRealUserAvatar(u);
-    const initial = u.name.trim()[0] || '?';
-    return `<div onclick="startChatWithUser('${u.email.replace(/'/g,"\\'")}','${u.name.replace(/'/g,"\\'")}','${av}')"
+    const av = (typeof getRealUserAvatar === 'function') ? getRealUserAvatar(u) :
+      (u.photo || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=1a6dff&color=fff&size=80`);
+    return `<div onclick="startChatWithUser('${(u.email||'').replace(/'/g,"\\'")}','${u.name.replace(/'/g,"\\'")}','${av}')"
       style="display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;transition:background .15s;border-bottom:1px solid #f0f2f5"
       onmouseenter="this.style.background='#f7f8fa'" onmouseleave="this.style.background='transparent'">
       <div style="position:relative;flex-shrink:0">
@@ -15309,15 +15968,68 @@ function _ensureConversation(email, name, avatarSrc) {
 (function ensureLikedGreenStyle() {
   const styleEl = document.createElement('style');
   styleEl.textContent = `
+    /* ── زر الإعجاب الأخضر ── */
+    .reaction-btn.liked,
     .reaction-btn.liked-green {
       color: #00c853 !important;
       background: rgba(0,200,83,.08) !important;
       border-radius: var(--radius-sm,8px);
     }
+    .reaction-btn.liked i,
     .reaction-btn.liked-green i {
       color: #00c853 !important;
     }
     .reaction-btn { transition: color .2s, background .2s; }
+
+    /* ── تعليقات: إعجاب + رد ── */
+    .cmt-actions {
+      display: flex; gap: 14px; margin-top: 5px; padding-right: 4px;
+    }
+    .cmt-action-btn {
+      background: none; border: none; cursor: pointer;
+      font-family: var(--font-main); font-size: .72rem;
+      color: #65676b; display: flex; align-items: center; gap: 4px;
+      padding: 2px 0; transition: color .15s;
+    }
+    .cmt-action-btn:hover { color: var(--primary); }
+    .cmt-action-btn.liked-cmt { color: #00c853 !important; }
+    .cmt-action-btn.liked-cmt i { color: #00c853 !important; }
+
+    /* ── نموذج الرد على تعليق ── */
+    .cmt-reply-box {
+      display: none; margin-top: 8px; margin-right: 40px;
+      background: #f8faff; border-radius: 12px;
+      padding: 8px 10px; border: 1px solid #dce8ff;
+    }
+    .cmt-reply-box.open { display: flex; gap: 8px; align-items: center; }
+    .cmt-reply-input {
+      flex: 1; border: none; background: transparent;
+      font-family: var(--font-body); font-size: .83rem;
+      color: var(--text-main); outline: none;
+    }
+    .cmt-reply-send {
+      background: var(--primary); color: #fff; border: none;
+      border-radius: 50%; width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: .75rem; flex-shrink: 0;
+    }
+
+    /* ── ردود التعليقات ── */
+    .cmt-replies { margin-right: 40px; margin-top: 4px; }
+    .cmt-reply-item {
+      display: flex; gap: 7px; margin-bottom: 6px; align-items: flex-start;
+    }
+    .cmt-reply-item img {
+      width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+    }
+    .cmt-reply-bubble {
+      background: #f0f2f5; border-radius: 12px; padding: 6px 10px; flex: 1;
+    }
+    .cmt-reply-author {
+      font-family: var(--font-main); font-size: .72rem; font-weight: 800; color: #1c1e21;
+    }
+    .cmt-reply-text { font-size: .82rem; color: #1c1e21; margin-top: 1px; }
+    .cmt-reply-time { font-size: .62rem; color: #65676b; margin-top: 3px; }
   `;
   document.head.appendChild(styleEl);
 })();
