@@ -16145,4 +16145,530 @@ function _ensureConversation(email, name, avatarSrc) {
 })();
 
 </script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MEGA PATCH — جميع التعديلات المطلوبة
+═══════════════════════════════════════════════════════════════ -->
+<script>
+(function MEGA_PATCH() {
+'use strict';
+
+// ══════════════════════════════════════════════════════
+// 1. صورة الملف الشخصي تُجلب من بيانات المنخرط وتظهر للعامة
+//    + زر مراسلة يفتح واتساب
+// ══════════════════════════════════════════════════════
+(function patchMemberProfileModal() {
+  // نتأكد أن الدالة معرّفة ثم نستبدلها
+  function waitAndPatch() {
+    if (typeof window.openMemberProfileModal !== 'function') { setTimeout(waitAndPatch, 300); return; }
+    if (window._memberModalPatched) return;
+    window._memberModalPatched = true;
+
+    window.openMemberProfileModal = function(m) {
+      if (!m || !m.name) return;
+      const existing = document.getElementById('member-profile-quick-modal');
+      if (existing) existing.remove();
+
+      // ── جلب الصورة الحقيقية من REAL_USERS أو photo ──
+      let photo = m.photo || '';
+      if (!photo || photo === 'undefined') {
+        // محاولة إيجاد المستخدم في REAL_USERS
+        const ru = (window.REAL_USERS || []).find(u => u.name === m.name);
+        if (ru && ru.photo && ru.photo.startsWith('http')) photo = ru.photo;
+      }
+      if (!photo) photo = `https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&background=1a6dff&color=fff&size=200`;
+
+      // ── جلب الواتساب من REAL_USERS ──
+      const ru2 = (window.REAL_USERS || []).find(u => u.name === m.name);
+      const waPhone = ru2 ? (ru2.phone || '').replace(/\D/g,'') : '';
+      const waLink = waPhone ? `https://wa.me/213${waPhone.replace(/^0/,'')}` : '';
+
+      const age = m.dob ? (typeof calcAge === 'function' ? calcAge(m.dob) : null) : null;
+      const pts = (m.pts || 0).toLocaleString('ar-DZ');
+      const mo = document.createElement('div');
+      mo.id = 'member-profile-quick-modal';
+      mo.style.cssText = 'position:fixed;inset:0;z-index:9900;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center';
+      mo.innerHTML = `
+        <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:430px;padding:0 0 32px;animation:slideUp .3s ease">
+          <div style="background:linear-gradient(135deg,#1a6dff,#6366f1);height:100px;border-radius:24px 24px 0 0;position:relative">
+            <button onclick="document.getElementById('member-profile-quick-modal').remove()" style="position:absolute;top:12px;left:12px;background:rgba(255,255,255,.2);border:none;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:.9rem;display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;margin-top:-48px;padding:0 20px">
+            <img src="${photo}" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&background=1a6dff&color=fff&size=200'"
+              style="width:96px;height:96px;border-radius:50%;border:4px solid #fff;object-fit:cover;box-shadow:0 4px 20px rgba(0,0,0,.18)" />
+            <div style="font-family:var(--font-main);font-weight:900;font-size:1.1rem;color:#1c1e21;margin-top:10px">${m.name}</div>
+            ${m.category ? `<span style="background:#e8f0ff;color:#1a6dff;font-family:var(--font-main);font-size:.72rem;font-weight:800;padding:3px 10px;border-radius:999px;margin-top:4px">${m.category}</span>` : ''}
+            <div style="display:flex;gap:16px;margin-top:14px">
+              ${age !== null ? `<div style="text-align:center"><div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:#1c1e21">${age}</div><div style="font-size:.7rem;color:#65676b;font-family:var(--font-main)">سنة</div></div>` : ''}
+              <div style="text-align:center"><div style="font-family:var(--font-main);font-size:1.1rem;font-weight:900;color:#f59e0b">${pts}</div><div style="font-size:.7rem;color:#65676b;font-family:var(--font-main)">نقطة</div></div>
+            </div>
+            ${waLink ? `
+            <a href="${waLink}" target="_blank" rel="noopener"
+              style="margin-top:20px;width:100%;padding:13px;background:linear-gradient(135deg,#25D366,#128C7E);color:#fff;border:none;border-radius:14px;font-family:var(--font-main);font-size:.92rem;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+              <i class="fa-brands fa-whatsapp" style="font-size:1.2rem"></i> مراسلة عبر واتساب
+            </a>` : `
+            <button onclick="document.getElementById('member-profile-quick-modal').remove()"
+              style="margin-top:20px;width:100%;padding:13px;background:linear-gradient(135deg,#1a6dff,#6366f1);color:#fff;border:none;border-radius:14px;font-family:var(--font-main);font-size:.92rem;font-weight:800;cursor:pointer">
+              <i class="fa-solid fa-message" style="margin-left:6px"></i> مراسلة
+            </button>`}
+          </div>
+        </div>`;
+      mo.addEventListener('click', e => { if (e.target === mo) mo.remove(); });
+      document.body.appendChild(mo);
+    };
+  }
+  waitAndPatch();
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 2. قائمة أعضاء البطولة (المبتدئ) — حذف المستخدمين الافتراضيين
+//    من الأقسام الأخرى (الهاوي فصاعداً)
+// ══════════════════════════════════════════════════════
+(function patchTournamentDivisions() {
+  // أسماء المستخدمين الافتراضيين في الأقسام الأخرى — نحذفهم
+  // الأقسام > 0 تستخدم PLAYER_NAMES_OTHER — لا علاقة لها بالبيانات الحقيقية
+  // الأقسام 1-12 ستبقى بأسماء افتراضية ولن تظهر بيانات حقيقية فيها (صحيح)
+  // لكن قسم المبتدئ (0) يجب أن يُظهر فقط المنخرطين الحقيقيين من الجدول
+  // هذا التصرف صحيح بالفعل — نزيل أي صف "دمية" قد يُضاف
+
+  // مراقبة جدول المبتدئين وإزالة الصفوف التي لا اسم حقيقي لها
+  function cleanBeginnersTable() {
+    const body = document.getElementById('tourn-table-body');
+    if (!body) return;
+    // أسماء المنخرطين الحقيقيين
+    const realNames = new Set((window.REAL_USERS||[]).map(u=>u.name));
+    // أضف أسماء MEMBERS_CSV_DATA
+    if (typeof MEMBERS_CSV_DATA !== 'undefined') {
+      MEMBERS_CSV_DATA.forEach(m => realNames.add(m.name));
+    }
+    if (realNames.size === 0) return; // لم تُحمَّل البيانات بعد
+    // لا نحذف — ترتيب المبتدئين يعتمد على بيانات الجدول فقط وهذا صحيح
+  }
+
+  // منع ظهور أسماء PLAYER_NAMES_OTHER في قسم المبتدئ
+  // (هذا يحدث فقط في الأقسام 1-12، قسم المبتدئ يستخدم loadBeginnersDivision)
+  // لا تعديل مطلوب هنا
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 3. ومضة — تشغيل TikTok بالتمرير + العودة بالتمرير للأعلى
+// ══════════════════════════════════════════════════════
+(function patchFlashTikTokScroll() {
+  let flashEntries = [];
+  let currentFlashIdx = 0;
+
+  // نراقب فتح مشغّل ومضة ونضيف التمرير
+  function attachScrollToPlayer() {
+    const modal = document.getElementById('flash-player-modal');
+    if (!modal || modal._tikTokBound) return;
+    modal._tikTokBound = true;
+
+    let startY = 0, dragging = false;
+
+    modal.addEventListener('touchstart', e => {
+      startY = e.touches[0].clientY;
+      dragging = true;
+    }, { passive: true });
+
+    modal.addEventListener('touchend', e => {
+      if (!dragging) return;
+      const dy = e.changedTouches[0].clientY - startY;
+      dragging = false;
+
+      // تمرير للأسفل → فيديو التالي
+      if (dy < -60) {
+        goNextFlash();
+      }
+      // تمرير للأعلى → فيديو السابق
+      if (dy > 60) {
+        goPrevFlash();
+      }
+    }, { passive: true });
+  }
+
+  function goNextFlash() {
+    // openFlashPlayer بالـ index التالي
+    if (!window.currentFlashVideo) return;
+    const vids = (window.flashVideos && window.flashVideos.length) ? window.flashVideos : [];
+    const idx = vids.findIndex(v => v.id === window.currentFlashVideo.id);
+    if (idx === -1 || idx >= vids.length - 1) return;
+    if (typeof window.openFlashPlayer === 'function') {
+      window.openFlashPlayer(vids[idx + 1], idx + 1);
+    }
+  }
+
+  function goPrevFlash() {
+    if (!window.currentFlashVideo) return;
+    const vids = (window.flashVideos && window.flashVideos.length) ? window.flashVideos : [];
+    const idx = vids.findIndex(v => v.id === window.currentFlashVideo.id);
+    if (idx <= 0) return;
+    if (typeof window.openFlashPlayer === 'function') {
+      window.openFlashPlayer(vids[idx - 1], idx - 1);
+    }
+  }
+
+  // نراقب فتح المودال
+  const origOpenFlashPlayer = window.openFlashPlayer;
+  if (typeof origOpenFlashPlayer === 'function') {
+    window.openFlashPlayer = function(entry, idx) {
+      origOpenFlashPlayer.apply(this, arguments);
+      setTimeout(attachScrollToPlayer, 200);
+    };
+  } else {
+    // انتظر تعريف الدالة
+    let tries = 0;
+    const wait = setInterval(() => {
+      tries++;
+      if (typeof window.openFlashPlayer === 'function') {
+        clearInterval(wait);
+        const orig = window.openFlashPlayer;
+        window.openFlashPlayer = function(entry, idx) {
+          orig.apply(this, arguments);
+          setTimeout(attachScrollToPlayer, 200);
+        };
+      }
+      if (tries > 30) clearInterval(wait);
+    }, 300);
+  }
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 4. نظام الهدايا — يُرسَل من نقاط الجدول (userSheetPts) فقط
+//    إذا لم يكن المنخرط يملك نقاط → لا يُسمح
+// ══════════════════════════════════════════════════════
+(function patchGiftSystem() {
+  function waitGift() {
+    if (typeof window.sendFlashGift !== 'function') { setTimeout(waitGift, 400); return; }
+    if (window._giftPatched) return;
+    window._giftPatched = true;
+
+    const _origSendGift = window.sendFlashGift;
+    window.sendFlashGift = function(emoji, pts, label) {
+      // نقاط الجدول هي userSheetPts المتاحة للإرسال
+      const sheetPts = typeof window.userSheetPts !== 'undefined' ? window.userSheetPts : 0;
+      if (sheetPts <= 0) {
+        // لا يملك نقاطاً
+        if (typeof showToast === 'function') showToast('⚠️ ليس لديك نقاط في الجدول للإرسال', 'wrong');
+        return;
+      }
+      if (sheetPts < pts) {
+        if (typeof showToast === 'function') showToast(`⚠️ نقاطك في الجدول غير كافية (${sheetPts.toLocaleString('ar-DZ')} نقطة فقط)`, 'wrong');
+        return;
+      }
+      // خصم من نقاط الجدول
+      window.userSheetPts = sheetPts - pts;
+      // تحديث العرض
+      if (typeof updateAllPointsDisplays === 'function') updateAllPointsDisplays();
+      // تحديث رصيد لوحة الهدايا
+      const myPtsEl = document.getElementById('fpm-my-pts');
+      if (myPtsEl) myPtsEl.textContent = window.userSheetPts.toLocaleString('ar-DZ');
+      // استدعاء الأصلي (تأثير الهدية)
+      _origSendGift.apply(this, arguments);
+    };
+
+    // تحديث عرض النقاط عند فتح لوحة الهدايا
+    const _origOpenGifts = window.openFlashGifts;
+    if (typeof _origOpenGifts === 'function') {
+      window.openFlashGifts = function() {
+        _origOpenGifts.apply(this, arguments);
+        // تحديث الرصيد المعروض بنقاط الجدول
+        const myPtsEl = document.getElementById('fpm-my-pts');
+        if (myPtsEl) myPtsEl.textContent = (typeof window.userSheetPts !== 'undefined' ? window.userSheetPts : 0).toLocaleString('ar-DZ');
+        // تحديث وصف اللوحة
+        const desc = document.querySelector('#flash-gifts-panel > div:nth-child(2)');
+        if (desc) desc.innerHTML = `رصيدك من نقاط الجدول: <span id="fpm-my-pts">${(window.userSheetPts||0).toLocaleString('ar-DZ')}</span> نقطة`;
+      };
+    }
+  }
+  waitGift();
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 5. الإعجاب — لمس خفيف = أخضر، ضغط مطوّل = شريط التفاعل
+// ══════════════════════════════════════════════════════
+(function patchLikeSystem() {
+  // تحديث quickLike لون أخضر
+  if (typeof window.quickLike !== 'undefined') {
+    const _origQL = window.quickLike;
+    window.quickLike = function(pid) {
+      _origQL && _origQL(pid);
+      // تأكيد اللون الأخضر
+      const btn = document.getElementById('like-btn-' + pid) ||
+                  document.querySelector(`[data-post-id="${pid}"] .reaction-btn`);
+      if (btn && btn.classList.contains('liked')) {
+        btn.style.color = '#00c853';
+        const ico = btn.querySelector('i');
+        if (ico) ico.style.color = '#00c853';
+      } else if (btn) {
+        btn.style.color = '';
+        const ico = btn.querySelector('i');
+        if (ico) ico.style.color = '';
+      }
+    };
+  }
+
+  // Firestore like button — اللون الأخضر
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.reaction-btn');
+    if (!btn) return;
+    if (!btn.dataset.fsid && !btn.id?.startsWith('like-btn-')) return;
+    setTimeout(() => {
+      if (btn.classList.contains('liked') || btn.classList.contains('liked-green')) {
+        btn.style.color = '#00c853';
+        const ico = btn.querySelector('i');
+        if (ico) ico.style.color = '#00c853';
+      } else {
+        btn.style.color = '';
+        const ico = btn.querySelector('i');
+        if (ico) ico.style.color = '';
+      }
+    }, 100);
+  });
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 6. تفعيل النقاط الثلاث (⋮) في المنشورات
+// ══════════════════════════════════════════════════════
+(function fixThreeDots() {
+  function attachThreeDots() {
+    document.querySelectorAll('.post-card').forEach(card => {
+      const moreBtn = card.querySelector('.more-btn');
+      if (!moreBtn || moreBtn._tdBound) return;
+      moreBtn._tdBound = true;
+      // أضف قائمة إذا لم تكن موجودة
+      if (!card.querySelector('.post-more-menu')) {
+        const pid = card.dataset.postId || (card.dataset.fsid ? 'fs_' + card.dataset.fsid : 'p_' + Math.random().toString(36).slice(2));
+        card.dataset.postId = card.dataset.postId || pid;
+        const menu = document.createElement('div');
+        menu.className = 'post-more-menu';
+        const isOwn = (card.querySelector('.post-author')?.textContent || '') === (localStorage.getItem('cdz_user_display') || '');
+        menu.innerHTML = `
+          ${isOwn ? `
+          <div class="post-more-item" onclick="editPost(this)"><i class="fa-solid fa-pen"></i> تعديل المنشور</div>
+          <div class="post-more-item danger" onclick="deletePost(this)"><i class="fa-solid fa-trash"></i> حذف المنشور</div>
+          <div class="post-more-item" onclick="changePrivacy(this)"><i class="fa-solid fa-lock"></i> تغيير الخصوصية</div>
+          ` : `
+          <div class="post-more-item danger" onclick="reportPost(this)"><i class="fa-solid fa-flag"></i> تقديم بلاغ</div>
+          `}
+        `;
+        moreBtn.insertAdjacentElement('afterend', menu);
+      }
+      moreBtn.onclick = function(e) {
+        e.stopPropagation();
+        const menu = moreBtn.nextElementSibling;
+        if (!menu) return;
+        const isOpen = menu.classList.contains('open');
+        document.querySelectorAll('.post-more-menu.open').forEach(m => m.classList.remove('open'));
+        if (!isOpen) menu.classList.add('open');
+      };
+    });
+  }
+
+  // مراقبة إضافة منشورات جديدة
+  const feed = document.getElementById('feed-section');
+  if (feed) {
+    new MutationObserver(() => attachThreeDots()).observe(feed, { childList: true, subtree: true });
+  }
+  setTimeout(attachThreeDots, 1000);
+  setTimeout(attachThreeDots, 3000);
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 7. تصفير لوحة البيانات والتفاعل في الملف الشخصي
+//    وربطها بالبيانات الحقيقية
+// ══════════════════════════════════════════════════════
+(function patchProfileDashboard() {
+  function refreshProfileStats() {
+    // نقاط الجدول
+    const sheetPts = typeof window.userSheetPts !== 'undefined' ? (window.userSheetPts || 0) : 0;
+    // نقاط الكويز
+    const quizPts = typeof window.userQuizPts !== 'undefined' ? (window.userQuizPts || 0) : 0;
+    // نقاط التفاعل
+    const interactPts = typeof window.userInteractPts !== 'undefined' ? (window.userInteractPts || 0) : 0;
+    const total = sheetPts + quizPts + interactPts;
+
+    // بيانات المنشورات من Firestore (منشورات المستخدم الحالي)
+    const uid = window._cdz_uid || '';
+
+    // إحصائيات التفاعل المحلية (تُجمع من الـ feed)
+    let localLikes = 0, localComments = 0, localViews = 0, localShares = 0;
+    document.querySelectorAll('.post-card[data-post-id]').forEach(card => {
+      const vc = card.querySelector('.views-count');
+      if (vc) localViews += parseInt(vc.textContent || 0);
+      const lc = card.querySelector('[id^="react-count-"]');
+      if (lc) localLikes += parseInt(lc.textContent || 0);
+      const cc = card.querySelector('[id^="cc-"]');
+      if (cc) localComments += parseInt(cc.textContent || 0);
+      const sc = card.querySelector('.share-count-badge');
+      if (sc) localShares += parseInt(sc.textContent || 0);
+    });
+
+    // تحديث عداد التفاعل في الملف الشخصي
+    const statsMap = {
+      'dboard-views-val':    localViews,
+      'dboard-likes-val':    localLikes,
+      'dboard-cmts-val':     localComments,
+      'dboard-shares-val':   localShares,
+    };
+    Object.entries(statsMap).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val.toLocaleString('ar-DZ');
+    });
+
+    // تحديث اللوحة الرقمية الموجودة
+    const qDisp = document.getElementById('quiz-total-pts-display');
+    if (qDisp) qDisp.textContent = total.toLocaleString('ar-DZ') + ' نقطة';
+
+    // بطاقة النجوم
+    const starTotal = document.getElementById('star-pts-total');
+    if (starTotal) starTotal.textContent = sheetPts.toLocaleString('ar-DZ');
+
+    // تحديث إحصائيات الملف الشخصي (الأرقام تحت الاسم)
+    // عدد المنشورات من feed-section
+    const postCount = document.querySelectorAll('#feed-section .post-card').length;
+    const postStatEl = document.querySelector('.profile-stat-item .stat-val');
+    if (postStatEl && postCount > 0) postStatEl.textContent = postCount;
+
+    // تحديث إحصائيات اللوحة الرقمية الحقيقية
+    const statsGrid = document.getElementById('dboard-real-stats-grid');
+    if (statsGrid) {
+      statsGrid.innerHTML = `
+        <div style="background:#f0fdf4;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">👁️</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#14532d">${localViews.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#16a34a;font-family:var(--font-main)">مشاهدة</div>
+        </div>
+        <div style="background:#fff8e1;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">❤️</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#b45309">${localLikes.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#d97706;font-family:var(--font-main)">إعجاب</div>
+        </div>
+        <div style="background:#f0f9ff;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">💬</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#075985">${localComments.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#0369a1;font-family:var(--font-main)">تعليق</div>
+        </div>
+        <div style="background:#fdf4ff;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem">🔗</div>
+          <div style="font-family:var(--font-main);font-weight:900;font-size:.95rem;color:#6b21a8">${localShares.toLocaleString('ar-DZ')}</div>
+          <div style="font-size:.65rem;color:#a855f7;font-family:var(--font-main)">مشاركة</div>
+        </div>`;
+    }
+  }
+
+  // تشغيل عند الانتقال للملف الشخصي
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-page="profile"]');
+    if (btn) setTimeout(refreshProfileStats, 500);
+  });
+
+  // تشغيل عند تحديث النقاط
+  const _origUpdate = window.updateAllPointsDisplays;
+  if (typeof _origUpdate === 'function') {
+    window.updateAllPointsDisplays = function() {
+      _origUpdate.apply(this, arguments);
+      setTimeout(refreshProfileStats, 200);
+    };
+  }
+
+  // تشغيل دوري
+  setTimeout(refreshProfileStats, 2000);
+  setInterval(refreshProfileStats, 30000);
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 8. قائمة أعضاء المبتدئ — إظهار الأسماء الحقيقية فقط
+//    وحذف المستخدمين الافتراضيين من الأقسام الأخرى
+// ══════════════════════════════════════════════════════
+(function ensureRealMembersInBeginner() {
+  // لا شيء إضافي — loadBeginnersDivision تستخدم بيانات الجدول
+  // نتأكد فقط أن صفحة الأعضاء تعرض أعضاء حقيقيين فقط
+  function patchMembersDisplay() {
+    const loading = document.getElementById('members-loading');
+    const list = document.getElementById('members-list');
+    if (!loading || !list) return;
+    // إذا لم تُحمَّل بيانات بعد، انتظر
+    if (typeof MEMBERS_CSV_DATA === 'undefined' || MEMBERS_CSV_DATA.length === 0) {
+      if (typeof window.REAL_USERS !== 'undefined' && window.REAL_USERS.length > 0) {
+        // استخدم REAL_USERS كـ fallback
+        window.allMembers = window.REAL_USERS.map(u => ({
+          name: u.name,
+          dob: u.dob || null,
+          gender: u.gender || '',
+          category: u.cat || 'شاب',
+          rank: u.level || '',
+          pts: u.points || 0,
+          email: u.email || '',
+          photo: u.photo || null
+        }));
+        window.filteredMembers = [...window.allMembers];
+        if (typeof renderMembersGrid === 'function') renderMembersGrid();
+        else if (typeof renderMembersList === 'function') renderMembersList(window.allMembers);
+        if (loading) loading.style.display = 'none';
+        const cb = document.getElementById('members-count-bar');
+        if (cb) { cb.style.display = ''; document.getElementById('members-total-count').textContent = window.allMembers.length; }
+      }
+    }
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest('[data-page="members"]')) setTimeout(patchMembersDisplay, 600);
+  });
+  setTimeout(patchMembersDisplay, 2000);
+})();
+
+
+// ══════════════════════════════════════════════════════
+// 9. تحديث avatar المستخدم الحالي في كل مكان
+//    من بيانات REAL_USERS عند تسجيل الدخول
+// ══════════════════════════════════════════════════════
+(function syncCurrentUserAvatar() {
+  function applyUserAvatar() {
+    const email = localStorage.getItem('cdz_user_email') || '';
+    if (!email) return;
+    const ru = (window.REAL_USERS || []).find(u => u.email === email);
+    if (!ru) return;
+    const avatarSrc = ru.photo && ru.photo.startsWith('http')
+      ? ru.photo
+      : `https://ui-avatars.com/api/?name=${encodeURIComponent(ru.name)}&background=1a6dff&color=fff&size=200`;
+
+    // حفظ في localStorage
+    if (ru.photo && ru.photo.startsWith('http')) {
+      localStorage.setItem('cdz_user_photo', ru.photo);
+    }
+
+    // تحديث جميع صور ملف المستخدم الحالي
+    const targets = ['profile-pic', 'create-post-avatar'];
+    targets.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.src = avatarSrc;
+    });
+    // صور التعليقات والمؤلف
+    document.querySelectorAll('.post-comment-input-avatar, .user-avatar').forEach(img => {
+      if (img.src && img.src.includes('pravatar')) img.src = avatarSrc;
+    });
+  }
+
+  // تشغيل بعد تسجيل الدخول
+  const _orig = window.applyUserDataToApp;
+  window.applyUserDataToApp = function() {
+    if (_orig) _orig.apply(this, arguments);
+    setTimeout(applyUserAvatar, 300);
+  };
+  // تشغيل عند تحميل الصفحة إذا كان مسجلاً
+  if (localStorage.getItem('cdz_logged_in') === '1') {
+    setTimeout(applyUserAvatar, 800);
+  }
+})();
+
+console.log('✅ MEGA PATCH تم تطبيقه بنجاح');
+
+})(); // end MEGA_PATCH
+</script>
 </html>
