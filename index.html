@@ -7328,9 +7328,11 @@ if (document.readyState === 'loading') {
     reader.readAsDataURL(file);
   });
 
-  // استعادة صورة الغلاف عند التحميل
+  // استعادة صورة الغلاف عند التحميل (Supabase أولاً، ثم localStorage)
   (function restoreCoverPhoto() {
-    const saved = localStorage.getItem('cdz_cover_photo');
+    const savedSupabase = localStorage.getItem('cdz_cover_photo_supabase');
+    const savedLocal    = localStorage.getItem('cdz_cover_photo');
+    const saved = savedSupabase || savedLocal;
     if (saved) {
       const coverImg = document.getElementById('cover-img');
       if (coverImg) coverImg.src = saved;
@@ -9705,18 +9707,37 @@ if (document.readyState === 'loading') {
 
   function renderFriendSuggestions() {
     const grid = document.getElementById('friends-suggestions-grid');
-    if (!grid || grid.dataset.loaded) return;
+    if (!grid) return;
+    // السماح بإعادة التحميل إذا تغيّر المستخدم
     grid.dataset.loaded = '1';
+
+    const currentEmail = (localStorage.getItem('cdz_user_email') || '').toLowerCase();
+    const currentName  = (localStorage.getItem('cdz_user_display') || window._cdz_current_user_name || '').trim();
+
     const members = (typeof allMembers !== 'undefined' && allMembers.length) ? allMembers : MEMBERS_CSV_DATA;
-    grid.innerHTML = members.map((m, i) => {
+
+    // فلترة: إخفاء المستخدم الحالي من القائمة
+    const filtered = members.filter(m => {
+      const mEmail = (m.email || '').toLowerCase();
+      const mName  = (m.name  || '').trim();
+      if (currentEmail && mEmail && mEmail === currentEmail) return false;
+      if (currentName  && mName  && mName  === currentName)  return false;
+      return true;
+    });
+
+    if (!filtered.length) {
+      grid.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted);font-family:var(--font-main);font-size:.85rem;grid-column:1/-1">لا توجد اقتراحات حالياً</div>';
+      return;
+    }
+
+    grid.innerHTML = filtered.map((m, i) => {
       const photo = m.photo || m.photo_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(m.name)}`;
       const pts = (m.pts || 0).toLocaleString('ar-DZ');
       const id = 'fsugg-dyn-' + i;
-      // استنتاج السن من تاريخ الميلاد
       const age = m.dob ? calcAge(m.dob) : null;
       const ageHtml = age !== null ? `<div class="fcs-mutual" style="color:#6366f1"><i class="fa-solid fa-cake-candles"></i> ${age} سنة</div>` : '';
       return `
-        <div class="friend-card-sugg" id="${id}">
+        <div class="friend-card-sugg" id="${id}" data-email="${(m.email||'').toLowerCase()}" data-name="${m.name}">
           <img src="${photo}" alt="${m.name}"
             onerror="this.src='https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(m.name)}'"
             style="width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm);cursor:pointer"
@@ -9937,7 +9958,9 @@ if (document.readyState === 'loading') {
       row.style.cursor = 'pointer';
       let rankClass = p.rank === 1 ? 'gold' : p.rank === 2 ? 'silver' : p.rank === 3 ? 'bronze' : '';
       const trendIcon = isPromo ? '<i class="fa-solid fa-arrow-up"></i>' : '<i class="fa-solid fa-minus"></i>';
-      const avatarSrc = p.photo || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.name)}`;
+      const myName = localStorage.getItem('cdz_user_display') || window._cdz_current_user_name || '';
+      const myPhoto = localStorage.getItem('cdz_user_photo') || localStorage.getItem('cdz_user_photo_supabase') || '';
+      const avatarSrc = p.isMe && myPhoto ? myPhoto : (p.photo || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(p.name)}`);
       // استنتاج السن من تاريخ الميلاد
       const ageStr = p.dob ? (() => { const age = calcAge(p.dob); return age !== null ? ` · ${age} سنة` : ''; })() : '';
       row.innerHTML = `
@@ -16255,84 +16278,47 @@ function _ensureConversation(email, name, avatarSrc) {
 // ══════════════════════════════════════════════════════
 // 3. ومضة — تشغيل TikTok بالتمرير + العودة بالتمرير للأعلى
 // ══════════════════════════════════════════════════════
-(function patchFlashTikTokScroll() {
-  let flashEntries = [];
-  let currentFlashIdx = 0;
-
-  // نراقب فتح مشغّل ومضة ونضيف التمرير
-  function attachScrollToPlayer() {
-    const modal = document.getElementById('flash-player-modal');
-    if (!modal || modal._tikTokBound) return;
-    modal._tikTokBound = true;
-
-    let startY = 0, dragging = false;
-
-    modal.addEventListener('touchstart', e => {
-      startY = e.touches[0].clientY;
-      dragging = true;
-    }, { passive: true });
-
-    modal.addEventListener('touchend', e => {
-      if (!dragging) return;
-      const dy = e.changedTouches[0].clientY - startY;
-      dragging = false;
-
-      // تمرير للأسفل → فيديو التالي
-      if (dy < -60) {
-        goNextFlash();
-      }
-      // تمرير للأعلى → فيديو السابق
-      if (dy > 60) {
-        goPrevFlash();
-      }
-    }, { passive: true });
-  }
-
-  function goNextFlash() {
-    // openFlashPlayer بالـ index التالي
-    if (!window.currentFlashVideo) return;
-    const vids = (window.flashVideos && window.flashVideos.length) ? window.flashVideos : [];
-    const idx = vids.findIndex(v => v.id === window.currentFlashVideo.id);
-    if (idx === -1 || idx >= vids.length - 1) return;
-    if (typeof window.openFlashPlayer === 'function') {
-      window.openFlashPlayer(vids[idx + 1], idx + 1);
+// patch openFlashPlayer → توجيه للمشغّل TikTok الجديد
+(function redirectFlashToTikTok() {
+  function doRedirect() {
+    const origOpenFlashPlayer = window.openFlashPlayer;
+    if (typeof origOpenFlashPlayer !== 'function') {
+      setTimeout(doRedirect, 400);
+      return;
     }
-  }
-
-  function goPrevFlash() {
-    if (!window.currentFlashVideo) return;
-    const vids = (window.flashVideos && window.flashVideos.length) ? window.flashVideos : [];
-    const idx = vids.findIndex(v => v.id === window.currentFlashVideo.id);
-    if (idx <= 0) return;
-    if (typeof window.openFlashPlayer === 'function') {
-      window.openFlashPlayer(vids[idx - 1], idx - 1);
-    }
-  }
-
-  // نراقب فتح المودال
-  const origOpenFlashPlayer = window.openFlashPlayer;
-  if (typeof origOpenFlashPlayer === 'function') {
     window.openFlashPlayer = function(entry, idx) {
-      origOpenFlashPlayer.apply(this, arguments);
-      setTimeout(attachScrollToPlayer, 200);
-    };
-  } else {
-    // انتظر تعريف الدالة
-    let tries = 0;
-    const wait = setInterval(() => {
-      tries++;
-      if (typeof window.openFlashPlayer === 'function') {
-        clearInterval(wait);
-        const orig = window.openFlashPlayer;
-        window.openFlashPlayer = function(entry, idx) {
-          orig.apply(this, arguments);
-          setTimeout(attachScrollToPlayer, 200);
-        };
+      // نبني قائمة الفيديوهات من flashVideos أو flashEntries
+      const vids = (window.flashVideos && window.flashVideos.length) ? window.flashVideos : [];
+      if (vids.length > 0) {
+        const startIdx = (typeof idx === 'number' && idx >= 0) ? idx : 0;
+        openTikTokViewer(vids, startIdx);
+      } else {
+        // فيديو واحد فقط
+        openTikTokViewer([entry], 0);
       }
-      if (tries > 30) clearInterval(wait);
-    }, 300);
+    };
   }
+
+  // إعادة توجيه النقر على عناصر شبكة ومضة
+  document.addEventListener('click', function(e) {
+    const flashItem = e.target.closest('.flash-item, .flash-grid-item');
+    if (!flashItem) return;
+    const grid = document.getElementById('flash-grid-main');
+    if (!grid) return;
+    const allItems = Array.from(grid.querySelectorAll('.flash-item, .flash-grid-item'));
+    const idx = allItems.indexOf(flashItem);
+    const vids = (window.flashVideos && window.flashVideos.length) ? window.flashVideos : [];
+    if (vids.length > 0) {
+      e.stopImmediatePropagation();
+      openTikTokViewer(vids, Math.max(0, idx));
+    }
+  }, true);
+
+  doRedirect();
+  setTimeout(doRedirect, 1500);
 })();
+
+
 
 
 // ══════════════════════════════════════════════════════
@@ -16670,5 +16656,1235 @@ function _ensureConversation(email, name, avatarSrc) {
 console.log('✅ MEGA PATCH تم تطبيقه بنجاح');
 
 })(); // end MEGA_PATCH
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     🚀 SUPER PATCH v2 — إصلاحات شاملة
+     1. صورة الملف الشخصي والغلاف ثابتة في Supabase
+     2. ومضة: تشغيل TikTok عمودي تلقائي بشاشة كاملة
+     3. صورة الملف الشخصي في كل مكان (أصدقاء، بطولة، محادثات، عجلة، منشورات)
+     4. إشعارات حقيقية (Web Push API)
+     5. إخفاء حسابي من الأصدقاء المقترحين
+     6. نقاط البطولة = شيت + تفاعل + كويز
+     7. التفاعل + الجدول + الكويز → Google Sheets الخاص بالنقاط
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+(function() {
+'use strict';
+
+// ══════════════════════════════════════════════════════════════
+// § 1 — صورة الملف الشخصي والغلاف: تخزين في Supabase + ثبات كامل
+// ══════════════════════════════════════════════════════════════
+
+const SUPABASE_URL_V2  = 'https://wgzinbjwkmgobenyhsvz.supabase.co';
+const SUPABASE_KEY_V2  = 'sb_publishable_QwzwrJR6QKN2eZ9CAnLFQQ_U7suNWeq';
+const INTERACT_SHEET   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSysimZxstk6zyZtrsFElnoqdwkcD1daPrHcrbfWrC3VKJMqQMUUnu5GifdZuignpsgE0D6jnAcqJZ_/pub?gid=0&single=true&output=csv';
+
+// -- حفظ صورة الملف الشخصي في Supabase --
+async function saveAvatarToSupabase(url) {
+  const email = localStorage.getItem('cdz_user_email');
+  if (!email || !url) return;
+  const uid = email.replace(/[^a-zA-Z0-9]/g, '_');
+  try {
+    await fetch(`${SUPABASE_URL_V2}/rest/v1/user_profiles?on_conflict=uid`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY_V2,
+        'Authorization': `Bearer ${SUPABASE_KEY_V2}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify({ uid, email, avatar_url: url, updated_at: new Date().toISOString() })
+    });
+    localStorage.setItem('cdz_user_photo_supabase', url);
+    localStorage.setItem('cdz_user_photo', url);
+  } catch(e) { console.warn('saveAvatarToSupabase:', e); }
+}
+
+// -- حفظ صورة الغلاف في Supabase --
+async function saveCoverToSupabase(url) {
+  const email = localStorage.getItem('cdz_user_email');
+  if (!email || !url) return;
+  const uid = email.replace(/[^a-zA-Z0-9]/g, '_');
+  try {
+    await fetch(`${SUPABASE_URL_V2}/rest/v1/user_profiles?on_conflict=uid`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY_V2,
+        'Authorization': `Bearer ${SUPABASE_KEY_V2}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify({ uid, email, cover_url: url, updated_at: new Date().toISOString() })
+    });
+    localStorage.setItem('cdz_cover_photo_supabase', url);
+    localStorage.setItem('cdz_cover_photo', url);
+  } catch(e) { console.warn('saveCoverToSupabase:', e); }
+}
+
+// -- جلب صور المستخدم من Supabase عند الدخول --
+async function loadUserPhotosFromSupabase() {
+  const email = localStorage.getItem('cdz_user_email');
+  if (!email) return;
+  const uid = email.replace(/[^a-zA-Z0-9]/g, '_');
+  try {
+    const res = await fetch(`${SUPABASE_URL_V2}/rest/v1/user_profiles?uid=eq.${uid}&select=avatar_url,cover_url`, {
+      headers: {
+        'apikey': SUPABASE_KEY_V2,
+        'Authorization': `Bearer ${SUPABASE_KEY_V2}`
+      }
+    });
+    const data = await res.json();
+    if (data && data[0]) {
+      const { avatar_url, cover_url } = data[0];
+      if (avatar_url) {
+        localStorage.setItem('cdz_user_photo', avatar_url);
+        localStorage.setItem('cdz_user_photo_supabase', avatar_url);
+        if (typeof syncAvatarEverywhere === 'function') syncAvatarEverywhere(avatar_url);
+      }
+      if (cover_url) {
+        localStorage.setItem('cdz_cover_photo', cover_url);
+        localStorage.setItem('cdz_cover_photo_supabase', cover_url);
+        const coverImg = document.getElementById('cover-img');
+        if (coverImg) coverImg.src = cover_url;
+      }
+    }
+  } catch(e) { console.warn('loadUserPhotosFromSupabase:', e); }
+}
+
+// -- اعتراض رفع الصورة الشخصية لحفظها في Supabase --
+(function patchAvatarUpload() {
+  const inp = document.getElementById('avatar-upload');
+  if (!inp) return;
+  inp.addEventListener('change', async function() {
+    const file = this.files[0];
+    if (!file) return;
+    // رفع إلى Cloudinary أولاً
+    if (typeof window.cdnUpload === 'function') {
+      try {
+        const result = await window.cdnUpload(file, 'avatars');
+        const url = result.url;
+        localStorage.setItem('cdz_user_photo', url);
+        localStorage.setItem('cdz_user_photo_supabase', url);
+        if (typeof syncAvatarEverywhere === 'function') syncAvatarEverywhere(url);
+        await saveAvatarToSupabase(url);
+        if (typeof window.showToast === 'function') window.showToast('✅ تم حفظ صورتك الشخصية');
+      } catch(e) {
+        // fallback إلى base64 في localStorage فقط
+        const reader = new FileReader();
+        reader.onload = async function(ev) {
+          const src = ev.target.result;
+          localStorage.setItem('cdz_user_photo', src);
+          if (typeof syncAvatarEverywhere === 'function') syncAvatarEverywhere(src);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  });
+})();
+
+// -- اعتراض رفع الغلاف --
+(function patchCoverUpload() {
+  const inp = document.getElementById('cover-upload');
+  if (!inp) return;
+  inp.addEventListener('change', async function() {
+    const file = this.files[0];
+    if (!file) return;
+    if (typeof window.cdnUpload === 'function') {
+      try {
+        const result = await window.cdnUpload(file, 'covers');
+        const url = result.url;
+        const coverImg = document.getElementById('cover-img');
+        if (coverImg) coverImg.src = url;
+        await saveCoverToSupabase(url);
+        if (typeof window.showToast === 'function') window.showToast('✅ تم حفظ صورة الغلاف');
+      } catch(e) {
+        const reader = new FileReader();
+        reader.onload = async function(ev) {
+          const src = ev.target.result;
+          const coverImg = document.getElementById('cover-img');
+          if (coverImg) coverImg.src = src;
+          localStorage.setItem('cdz_cover_photo', src);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  });
+})();
+
+// -- تحميل الصور من Supabase عند كل دخول --
+(function initPhotosLoad() {
+  if (localStorage.getItem('cdz_logged_in') === '1') {
+    setTimeout(loadUserPhotosFromSupabase, 1000);
+  }
+  // مراقبة تسجيل الدخول
+  const _origApply = window.applyUserDataToApp;
+  window.applyUserDataToApp = function() {
+    if (_origApply) _origApply.apply(this, arguments);
+    setTimeout(loadUserPhotosFromSupabase, 600);
+  };
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// § 2 — ومضة: مشغّل TikTok عمودي بشاشة كاملة
+// ══════════════════════════════════════════════════════════════
+
+// مشغّل ومضة الجديد بنظام TikTok
+function openTikTokViewer(videos, startIndex) {
+  // إزالة أي مشغّل سابق
+  const existing = document.getElementById('tiktok-viewer-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'tiktok-viewer-overlay';
+  overlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 99999;
+    background: #000; overflow: hidden;
+    touch-action: pan-y;
+  `;
+
+  let currentIdx = startIndex || 0;
+  let startTouchY = 0;
+  let isDragging = false;
+  let currentVideo = null;
+
+  function renderVideo(idx) {
+    overlay.innerHTML = '';
+    if (!videos[idx]) return;
+    const v = videos[idx];
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `
+      position: relative; width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+    `;
+
+    // الفيديو
+    const vid = document.createElement('video');
+    vid.src = v.dataUrl || v.videoUrl || v.url || '';
+    vid.style.cssText = `
+      width: 100%; height: 100%;
+      object-fit: contain; background: #000;
+    `;
+    vid.setAttribute('playsinline', '');
+    vid.setAttribute('loop', '');
+    vid.muted = false;
+    vid.autoplay = true;
+    currentVideo = vid;
+
+    // شريط التقدم
+    const progressBar = document.createElement('div');
+    progressBar.style.cssText = `
+      position: absolute; top: 0; left: 0; height: 3px;
+      background: linear-gradient(90deg, #fff, rgba(255,255,255,.4));
+      width: 0%; transition: width .1s linear; z-index: 10;
+    `;
+
+    vid.addEventListener('timeupdate', () => {
+      if (vid.duration) {
+        progressBar.style.width = (vid.currentTime / vid.duration * 100) + '%';
+      }
+    });
+
+    // زر إغلاق
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+    closeBtn.style.cssText = `
+      position: absolute; top: 16px; right: 16px;
+      background: rgba(0,0,0,.5); border: none; color: #fff;
+      width: 38px; height: 38px; border-radius: 50%;
+      font-size: 1.1rem; cursor: pointer; z-index: 20;
+      display: flex; align-items: center; justify-content: center;
+    `;
+    closeBtn.onclick = () => { vid.pause(); overlay.remove(); };
+
+    // معلومات الفيديو (أسفل)
+    const infoBar = document.createElement('div');
+    infoBar.style.cssText = `
+      position: absolute; bottom: 80px; right: 0; left: 0;
+      padding: 0 16px; z-index: 20;
+    `;
+    const authorAvatar = v.authorAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(v.authorName||'?')}&background=1a6dff&color=fff&size=60`;
+    infoBar.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <img src="${authorAvatar}" style="width:40px;height:40px;border-radius:50%;border:2px solid #fff;object-fit:cover"/>
+        <span style="color:#fff;font-family:var(--font-main);font-weight:700;font-size:.88rem;text-shadow:0 1px 4px rgba(0,0,0,.8)">${v.authorName||'عضو'}</span>
+      </div>
+      ${v.caption ? `<div style="color:#fff;font-family:var(--font-main);font-size:.82rem;text-shadow:0 1px 4px rgba(0,0,0,.8);line-height:1.5">${v.caption}</div>` : ''}
+    `;
+
+    // أزرار التفاعل (يمين)
+    const actionsBar = document.createElement('div');
+    actionsBar.style.cssText = `
+      position: absolute; bottom: 100px; left: 16px;
+      display: flex; flex-direction: column; gap: 18px; z-index: 20;
+      align-items: center;
+    `;
+    const btnStyle = `
+      display:flex;flex-direction:column;align-items:center;gap:3px;
+      background:none;border:none;color:#fff;cursor:pointer;
+      font-size:.7rem;font-family:var(--font-main);font-weight:700;
+    `;
+    const likes = v.likes || 0;
+    const comments = (v.comments||[]).length;
+    actionsBar.innerHTML = `
+      <button style="${btnStyle}" onclick="flashQuickLike(this,'${v.id||''}')">
+        <span style="font-size:1.6rem;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))">❤️</span>
+        <span>${likes}</span>
+      </button>
+      <button style="${btnStyle}">
+        <span style="font-size:1.6rem;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))">💬</span>
+        <span>${comments}</span>
+      </button>
+      <button style="${btnStyle}">
+        <span style="font-size:1.6rem;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))">↗️</span>
+        <span>مشاركة</span>
+      </button>
+    `;
+
+    // مؤشرات التنقل
+    const navHint = document.createElement('div');
+    navHint.style.cssText = `
+      position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+      display:flex;gap:6px;z-index:20;
+    `;
+    videos.forEach((_, i) => {
+      const dot = document.createElement('div');
+      dot.style.cssText = `
+        width:${i===idx?'16px':'6px'};height:6px;border-radius:3px;
+        background:${i===idx?'#fff':'rgba(255,255,255,.4)'};transition:all .3s;
+      `;
+      navHint.appendChild(dot);
+    });
+
+    wrap.appendChild(progressBar);
+    wrap.appendChild(vid);
+    wrap.appendChild(closeBtn);
+    wrap.appendChild(infoBar);
+    wrap.appendChild(actionsBar);
+    wrap.appendChild(navHint);
+    overlay.appendChild(wrap);
+
+    // تشغيل تلقائي
+    setTimeout(() => vid.play().catch(()=>{}), 100);
+
+    // إيماءة السحب للتنقل
+    overlay.addEventListener('touchstart', e => {
+      startTouchY = e.touches[0].clientY;
+      isDragging = true;
+    }, { passive: true });
+
+    overlay.addEventListener('touchend', e => {
+      if (!isDragging) return;
+      isDragging = false;
+      const dy = e.changedTouches[0].clientY - startTouchY;
+      if (Math.abs(dy) < 50) {
+        // نقرة — تشغيل / إيقاف
+        if (vid.paused) vid.play().catch(()=>{});
+        else vid.pause();
+        return;
+      }
+      if (dy < -50 && currentIdx < videos.length - 1) {
+        // سحب لأعلى → الفيديو التالي
+        vid.pause();
+        currentIdx++;
+        renderVideo(currentIdx);
+      } else if (dy > 50 && currentIdx > 0) {
+        // سحب لأسفل → الفيديو السابق
+        vid.pause();
+        currentIdx--;
+        renderVideo(currentIdx);
+      }
+    }, { passive: true });
+  }
+
+  document.body.appendChild(overlay);
+  renderVideo(currentIdx);
+
+  // منع التمرير خلف المشغّل
+  overlay.addEventListener('wheel', e => e.stopPropagation(), { passive: false });
+}
+
+// دالة مساعدة للإعجاب بفيديو ومضة
+window.flashQuickLike = function(btn, videoId) {
+  const countEl = btn.querySelector('span:last-child');
+  const curr = parseInt(countEl.textContent||0);
+  const liked = btn.dataset.liked === '1';
+  if (liked) {
+    countEl.textContent = curr - 1;
+    btn.dataset.liked = '0';
+    btn.style.transform = '';
+  } else {
+    countEl.textContent = curr + 1;
+    btn.dataset.liked = '1';
+    btn.style.transform = 'scale(1.15)';
+    setTimeout(() => { btn.style.transform = ''; }, 300);
+  }
+};
+
+// -- اعتراض شبكة ومضة لتحويلها إلى نظام TikTok --
+function patchFlashGrid() {
+  const grid = document.getElementById('flash-grid-main');
+  if (!grid) { setTimeout(patchFlashGrid, 800); return; }
+
+  // CSS جديد للشبكة
+  const style = document.createElement('style');
+  style.textContent = `
+    #flash-grid-main {
+      display: grid !important;
+      grid-template-columns: repeat(3, 1fr) !important;
+      gap: 2px !important;
+      padding: 0 !important;
+      background: #000 !important;
+    }
+    .flash-item-v2 {
+      position: relative; aspect-ratio: 9/16;
+      overflow: hidden; cursor: pointer; background: #111;
+    }
+    .flash-item-v2 video {
+      width: 100%; height: 100%; object-fit: cover;
+      pointer-events: none;
+    }
+    .flash-item-v2 .flash-thumb-overlay {
+      position: absolute; inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,.7) 0%, transparent 50%);
+      display: flex; flex-direction: column; justify-content: flex-end;
+      padding: 6px 5px;
+    }
+    .flash-item-v2 .flash-thumb-author {
+      display: flex; align-items: center; gap: 4px;
+    }
+    .flash-item-v2 .flash-thumb-author img {
+      width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid #fff;
+      object-fit: cover;
+    }
+    .flash-item-v2 .flash-thumb-name {
+      color: #fff; font-family: var(--font-main); font-size: .6rem;
+      font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.8);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .flash-item-v2 .flash-play-icon {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 32px; height: 32px; background: rgba(255,255,255,.25);
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: .85rem;
+    }
+    .flash-page { background: #000 !important; }
+    #page-flash { background: #000 !important; }
+    .flash-page .flash-header {
+      background: rgba(0,0,0,.85) !important;
+      backdrop-filter: blur(10px);
+      border-bottom: none !important;
+    }
+    .flash-page .flash-title { color: #fff !important; }
+  `;
+  document.head.appendChild(style);
+
+  // مراقبة إضافة عناصر للشبكة وتحويلها
+  const observer = new MutationObserver(mutations => {
+    mutations.forEach(m => {
+      m.addedNodes.forEach(node => {
+        if (node.classList && !node.classList.contains('flash-item-v2') && node.classList.contains('flash-item')) {
+          convertFlashItemToV2(node);
+        }
+      });
+    });
+    rebuildFlashClickHandlers();
+  });
+  observer.observe(grid, { childList: true });
+
+  // تحويل العناصر الموجودة
+  Array.from(grid.querySelectorAll('.flash-item')).forEach(convertFlashItemToV2);
+  rebuildFlashClickHandlers();
+}
+
+function convertFlashItemToV2(el) {
+  if (!el || el.dataset.v2 === '1') return;
+  el.dataset.v2 = '1';
+  el.classList.add('flash-item-v2');
+
+  // تحسين عرض الصورة المصغرة
+  const vid = el.querySelector('video');
+  if (vid && !vid.getAttribute('poster')) {
+    vid.setAttribute('preload', 'metadata');
+    vid.muted = true;
+    vid.loop = false;
+    vid.removeAttribute('autoplay');
+    vid.removeAttribute('controls');
+  }
+
+  // إضافة أيقونة تشغيل
+  if (!el.querySelector('.flash-play-icon')) {
+    const playIcon = document.createElement('div');
+    playIcon.className = 'flash-play-icon';
+    playIcon.innerHTML = '<i class="fa-solid fa-play"></i>';
+    el.appendChild(playIcon);
+  }
+}
+
+function rebuildFlashClickHandlers() {
+  const grid = document.getElementById('flash-grid-main');
+  if (!grid) return;
+
+  const items = Array.from(grid.querySelectorAll('.flash-item, .flash-item-v2'));
+
+  items.forEach((item, idx) => {
+    // إزالة المستمع القديم وإعادة تعيينه
+    const newItem = item.cloneNode(true);
+    item.parentNode.replaceChild(newItem, item);
+    newItem.style.cursor = 'pointer';
+    newItem.addEventListener('click', () => {
+      // جمع كل الفيديوهات
+      const allItems = Array.from(grid.querySelectorAll('.flash-item, .flash-item-v2'));
+      const videos = allItems.map(el => {
+        const vid = el.querySelector('video');
+        const authorImg = el.querySelector('img');
+        const authorName = el.querySelector('.flash-author-name, .flash-username, span')?.textContent || 'عضو';
+        return {
+          id: el.dataset.flashId || el.dataset.id || '',
+          dataUrl: vid?.src || '',
+          videoUrl: vid?.src || '',
+          authorName: authorName.trim(),
+          authorAvatar: authorImg?.src || '',
+          likes: parseInt(el.querySelector('.flash-likes, .flash-like-count')?.textContent || 0),
+          comments: [],
+          caption: el.querySelector('.flash-caption, .flash-desc')?.textContent || ''
+        };
+      }).filter(v => v.dataUrl);
+
+      const clickedIdx = allItems.indexOf(newItem);
+      openTikTokViewer(videos, Math.max(0, clickedIdx));
+    });
+  });
+}
+
+// تشغيل التحويل عند فتح صفحة ومضة
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-page="flash"]');
+  if (btn) {
+    setTimeout(patchFlashGrid, 300);
+    setTimeout(rebuildFlashClickHandlers, 1000);
+  }
+}, false);
+
+setTimeout(patchFlashGrid, 2000);
+
+
+// ══════════════════════════════════════════════════════════════
+// § 3 — صورة الملف الشخصي في كل مكان (أصدقاء، بطولة، محادثات، عجلة، منشورات)
+// ══════════════════════════════════════════════════════════════
+
+function syncAvatarToAllScreens(src) {
+  if (!src) {
+    src = localStorage.getItem('cdz_user_photo') ||
+          localStorage.getItem('cdz_user_photo_supabase') || '';
+  }
+  if (!src) return;
+
+  // المعرفات المحددة
+  const ids = [
+    'profile-pic', 'composer-avatar', 'wheel-profile-avatar',
+    'wheel-center-pic', 'wa-avatar-0', 'wcb-avatar',
+    'member-card-mini-img', 'create-post-avatar',
+    'bcard-user-avatar', 'gosta-user-avatar'
+  ];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.tagName === 'IMG') el.src = src;
+  });
+
+  // الكلاسات العامة
+  const selectors = [
+    '.user-avatar', '.composer-avatar-img',
+    '.wheel-account-item:first-child img',
+    '.post-comment-input-avatar'
+  ];
+  selectors.forEach(sel => {
+    document.querySelectorAll(sel).forEach(img => { img.src = src; });
+  });
+
+  // صور المحادثات للمستخدم الحالي
+  const name = localStorage.getItem('cdz_user_display') || '';
+  document.querySelectorAll('.conv-avatar').forEach(img => {
+    if (img.alt === name || img.closest('[data-me="1"]')) img.src = src;
+  });
+
+  // صور المنشورات للمستخدم الحالي
+  document.querySelectorAll('.post-card').forEach(card => {
+    const author = card.querySelector('.post-author')?.textContent?.trim();
+    if (author && name && author === name) {
+      const av = card.querySelector('.post-header .avatar');
+      if (av) av.src = src;
+    }
+  });
+
+  // صور البطولة
+  const email = localStorage.getItem('cdz_user_email') || '';
+  document.querySelectorAll('.tourn-row').forEach(row => {
+    if (row.classList.contains('tourn-me') || row.textContent.includes('⭐')) {
+      const img = row.querySelector('img');
+      if (img) img.src = src;
+    }
+  });
+
+  // صورة قائمة الأصدقاء للمستخدم الحالي
+  document.querySelectorAll('#ftab-all .friend-item, #ftab-all .friends-list-all .friends-list-item').forEach(item => {
+    if (item.textContent.includes(name)) {
+      const img = item.querySelector('img');
+      if (img) img.src = src;
+    }
+  });
+
+  // صور التعليقات
+  document.querySelectorAll(`#fs-comments-overlay img`).forEach(img => {
+    if (!img.closest('.comment-item') || img.alt === name) img.src = src;
+  });
+}
+
+// مراقبة تغيير localStorage لصورة الملف الشخصي
+(function watchAvatarChanges() {
+  // كل ثانيتين: مزامنة الصورة في كل الصفحات
+  let lastAvatar = '';
+  setInterval(() => {
+    const current = localStorage.getItem('cdz_user_photo') || '';
+    if (current && current !== lastAvatar) {
+      lastAvatar = current;
+      syncAvatarToAllScreens(current);
+    }
+  }, 2000);
+
+  // patch syncAvatarEverywhere الأصلي
+  const _origSync = window.syncAvatarEverywhere;
+  window.syncAvatarEverywhere = function(src) {
+    if (_origSync) _origSync(src);
+    syncAvatarToAllScreens(src);
+  };
+})();
+
+// تطبيق الصورة عند فتح أي صفحة
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-page]');
+  if (btn) {
+    setTimeout(() => {
+      const src = localStorage.getItem('cdz_user_photo') || '';
+      if (src) syncAvatarToAllScreens(src);
+    }, 400);
+  }
+}, false);
+
+
+// ══════════════════════════════════════════════════════════════
+// § 4 — إشعارات حقيقية (Web Push API + Firebase FCM)
+// ══════════════════════════════════════════════════════════════
+
+window.CDZ_NOTIFICATIONS = window.CDZ_NOTIFICATIONS || [];
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  const perm = await Notification.requestPermission();
+  return perm === 'granted';
+}
+
+async function sendLocalNotification(title, body, icon, data) {
+  const granted = await requestNotificationPermission();
+  if (!granted) return;
+
+  const notif = new Notification(title, {
+    body: body || '',
+    icon: icon || 'https://smrt-kids-lap.github.io/icon-192.png',
+    badge: icon || '',
+    tag: 'cdz-' + Date.now(),
+    data: data || {},
+    vibrate: [200, 100, 200],
+    requireInteraction: false
+  });
+
+  notif.onclick = function() {
+    window.focus();
+    notif.close();
+    if (data && data.page && typeof navigateTo === 'function') {
+      navigateTo(data.page);
+    }
+  };
+
+  // إضافة للقائمة المحلية
+  const item = {
+    id: Date.now(),
+    title, body, icon: icon || '🔔',
+    time: new Date().toLocaleTimeString('ar-DZ', {hour:'2-digit',minute:'2-digit'}),
+    read: false, page: (data||{}).page || 'home'
+  };
+  window.CDZ_NOTIFICATIONS.unshift(item);
+  updateNotifBadge();
+  appendNotifToList(item);
+}
+
+function updateNotifBadge() {
+  const unread = window.CDZ_NOTIFICATIONS.filter(n => !n.read).length;
+  const badge = document.querySelector('#page-notifs ~ * .notif-badge, .bottom-nav-item[data-page="notifs"] .notif-dot');
+  const topBadge = document.querySelector('#btn-notifs .badge, .nav-icon-btn .badge');
+  [badge, topBadge].forEach(el => {
+    if (!el) return;
+    el.textContent = unread > 0 ? (unread > 9 ? '9+' : unread) : '';
+    el.style.display = unread > 0 ? '' : 'none';
+  });
+}
+
+function appendNotifToList(item) {
+  const list = document.getElementById('notifs-list');
+  if (!list) return;
+
+  // إزالة رسالة "لا توجد إشعارات"
+  const empty = list.querySelector('div[style*="text-align:center"]');
+  if (empty) empty.remove();
+
+  const el = document.createElement('div');
+  el.className = 'notif-item unread';
+  el.dataset.notifId = item.id;
+  el.style.cssText = `
+    display:flex;align-items:flex-start;gap:12px;
+    padding:12px 14px;border-bottom:1px solid var(--border);
+    background:rgba(26,109,255,.04);cursor:pointer;
+  `;
+  el.innerHTML = `
+    <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#1a6dff,#6366f1);
+      display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem">
+      ${item.icon || '🔔'}
+    </div>
+    <div style="flex:1">
+      <div style="font-family:var(--font-main);font-weight:700;font-size:.85rem;color:var(--text-main)">${item.title}</div>
+      <div style="font-size:.78rem;color:var(--text-muted);margin-top:2px;line-height:1.4">${item.body}</div>
+      <div style="font-size:.7rem;color:var(--text-light);margin-top:4px">${item.time}</div>
+    </div>
+    <div style="width:8px;height:8px;border-radius:50%;background:#1a6dff;flex-shrink:0;margin-top:4px"></div>
+  `;
+  el.onclick = () => {
+    el.style.background = '';
+    el.querySelector('[style*="background:#1a6dff;flex-shrink:0"]')?.remove();
+    const notif = window.CDZ_NOTIFICATIONS.find(n => n.id == item.id);
+    if (notif) notif.read = true;
+    updateNotifBadge();
+    if (item.page && typeof navigateTo === 'function') navigateTo(item.page);
+  };
+
+  list.insertBefore(el, list.firstChild);
+}
+
+// إشعارات تلقائية عند التفاعل
+(function patchInteractionNotifs() {
+  // منشور جديد
+  const _origPublish = window.publishPost;
+  if (typeof _origPublish === 'function') {
+    window.publishPost = function() {
+      _origPublish.apply(this, arguments);
+      setTimeout(() => {
+        sendLocalNotification(
+          '✅ تم نشر منشورك',
+          'ظهر منشورك لجميع الأعضاء',
+          '📝', { page: 'home' }
+        );
+      }, 1000);
+    };
+  }
+
+  // تعليق جديد على منشور
+  const _origComment = window.submitComment;
+  if (typeof _origComment === 'function') {
+    window.submitComment = function(postId) {
+      _origComment.apply(this, arguments);
+      const card = document.querySelector(`[data-post-id="${postId}"]`);
+      const author = card?.querySelector('.post-author')?.textContent?.trim() || '';
+      const me = localStorage.getItem('cdz_user_display') || '';
+      if (author && author !== me) {
+        sendLocalNotification(
+          '💬 تعليق جديد',
+          `علّق شخص على منشور ${author}`,
+          '💬', { page: 'home' }
+        );
+      }
+    };
+  }
+
+  // إعجاب
+  const _origLike = window.quickLike;
+  if (typeof _origLike === 'function') {
+    window.quickLike = function(postId) {
+      _origLike.apply(this, arguments);
+    };
+  }
+
+  // طلب صداقة
+  window.sendFriendRequest = function(name) {
+    sendLocalNotification(
+      '👋 طلب صداقة',
+      `أرسلت طلب صداقة لـ ${name}`,
+      '👥', { page: 'friends' }
+    );
+  };
+
+  // إشعار ترحيبي عند الدخول
+  window.addEventListener('load', () => {
+    if (localStorage.getItem('cdz_logged_in') === '1') {
+      const name = localStorage.getItem('cdz_user_display') || '';
+      setTimeout(() => {
+        sendLocalNotification(
+          `مرحباً ${name.split(' ')[0]} 👋`,
+          'تم تسجيل الدخول بنجاح إلى Connect DZ',
+          '🌟', { page: 'home' }
+        );
+      }, 2000);
+    }
+  });
+})();
+
+// تفعيل الإشعارات عند الضغط على أيقونة الجرس
+(function bindNotifBell() {
+  setTimeout(() => {
+    const bellBtns = document.querySelectorAll('[onclick*="notif"], [data-page="notifs"], #btn-notifs');
+    bellBtns.forEach(btn => {
+      const orig = btn.onclick;
+      btn.onclick = async function(e) {
+        if (orig) orig.call(this, e);
+        await requestNotificationPermission();
+      };
+    });
+  }, 1500);
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// § 5 — إخفاء حساب المستخدم الحالي من الأصدقاء المقترحين
+// ══════════════════════════════════════════════════════════════
+
+function filterSelfFromSuggestions() {
+  const email = localStorage.getItem('cdz_user_email') || '';
+  const name  = localStorage.getItem('cdz_user_display') || '';
+  if (!email && !name) return;
+
+  const grid = document.getElementById('friends-suggestions-grid');
+  if (!grid) return;
+
+  // إخفاء كارتات تحتوي على اسم/إيميل المستخدم الحالي
+  grid.querySelectorAll('.friend-card, .suggestion-card, [data-email], [data-name]').forEach(card => {
+    const cardEmail = (card.dataset.email || '').toLowerCase();
+    const cardName  = card.querySelector('.friend-name, .suggestion-name, h3, .member-name')?.textContent?.trim() || '';
+    if (
+      (email && cardEmail === email.toLowerCase()) ||
+      (name  && cardName  === name)
+    ) {
+      card.style.display = 'none';
+    }
+  });
+}
+
+// اعتراض دالة renderSuggestedFriends
+(function patchSuggestionsRender() {
+  // مراقبة تغييرات في شبكة المقترحين
+  function observeSuggestionsGrid() {
+    const grid = document.getElementById('friends-suggestions-grid');
+    if (!grid) { setTimeout(observeSuggestionsGrid, 1000); return; }
+    const obs = new MutationObserver(() => {
+      setTimeout(filterSelfFromSuggestions, 100);
+    });
+    obs.observe(grid, { childList: true, subtree: true });
+    filterSelfFromSuggestions();
+  }
+  observeSuggestionsGrid();
+
+  // تشغيل عند الضغط على تبويب المقترحين
+  document.addEventListener('click', function(e) {
+    const tab = e.target.closest('[onclick*="suggestions"], .friends-tab');
+    if (tab && tab.textContent.includes('مقترح')) {
+      setTimeout(filterSelfFromSuggestions, 300);
+    }
+    // تشغيل عند فتح صفحة الأصدقاء
+    if (e.target.closest('[data-page="friends"]')) {
+      setTimeout(filterSelfFromSuggestions, 600);
+    }
+  }, false);
+
+  // إضافة فلترة في دالة renderMembersInSuggestions
+  const _origRenderSug = window.renderSuggestedFriends || window.loadSuggestedFriends;
+  if (typeof _origRenderSug === 'function') {
+    const key = window.renderSuggestedFriends ? 'renderSuggestedFriends' : 'loadSuggestedFriends';
+    window[key] = function() {
+      _origRenderSug.apply(this, arguments);
+      setTimeout(filterSelfFromSuggestions, 200);
+    };
+  }
+})();
+
+// patch fetchMembersFromSheet لإخفاء نفسي
+(function patchMembersFetch() {
+  const _origFetch = window.fetchMembersFromSheet;
+  if (typeof _origFetch !== 'function') {
+    setTimeout(patchMembersFetch, 1000);
+    return;
+  }
+  window.fetchMembersFromSheet = async function() {
+    await _origFetch.apply(this, arguments);
+    filterSelfFromSuggestions();
+    // إخفاء من قائمة الأعضاء في تبويب المقترحين
+    const email = localStorage.getItem('cdz_user_email') || '';
+    if (window.MEMBERS_CSV_DATA && email) {
+      window.MEMBERS_CSV_DATA = window.MEMBERS_CSV_DATA.filter(m => 
+        m.email && m.email.toLowerCase() !== email.toLowerCase()
+      );
+    }
+  };
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// § 6 — نقاط البطولة = نقاط الجدول + التفاعل + الكويز
+// ══════════════════════════════════════════════════════════════
+
+function getTournamentTotalPoints() {
+  const sheetPts    = typeof window.userSheetPts    !== 'undefined' ? (window.userSheetPts    || 0) : 0;
+  const interactPts = typeof window.userInteractPts !== 'undefined' ? (window.userInteractPts || 0) : 0;
+  const quizPts     = typeof window.userQuizPts     !== 'undefined' ? (window.userQuizPts     || 0) : 0;
+  return sheetPts + interactPts + quizPts;
+}
+
+// تحديث عرض النقاط في البطولة
+function updateTournamentPoints() {
+  const total = getTournamentTotalPoints();
+  const email = localStorage.getItem('cdz_user_email') || '';
+  const name  = localStorage.getItem('cdz_user_display') || '';
+
+  // تحديث صف المستخدم في جدول البطولة
+  const tbody = document.getElementById('tourn-table-body');
+  if (tbody) {
+    tbody.querySelectorAll('.tourn-row, .tourn-me, [style*="tourn-me"]').forEach(row => {
+      if (row.classList.contains('tourn-me') || row.textContent.includes('⭐') || row.textContent.includes(name)) {
+        const ptsEl = row.querySelector('span:nth-child(3), [style*="font-weight:900;color:var(--primary)"]');
+        if (ptsEl) ptsEl.textContent = total.toLocaleString('ar-DZ');
+      }
+    });
+  }
+
+  // تحديث شريط الموسم
+  const yourRank = document.querySelector('.tourn-your-rank');
+  if (yourRank) {
+    // لا نغيّر الترتيب — فقط النقاط
+  }
+
+  // تحديث اللوحة الرقمية
+  const qDisp = document.getElementById('quiz-total-pts-display');
+  if (qDisp) qDisp.textContent = total.toLocaleString('ar-DZ') + ' نقطة';
+
+  const sheetPts = typeof window.userSheetPts !== 'undefined' ? (window.userSheetPts || 0) : 0;
+  const interactPts = typeof window.userInteractPts !== 'undefined' ? (window.userInteractPts || 0) : 0;
+  const quizPts = typeof window.userQuizPts !== 'undefined' ? (window.userQuizPts || 0) : 0;
+
+  // توزيع النقاط في اللوحة الرقمية
+  const dbSheet = document.getElementById('dboard-sheet-pts');
+  const dbInteract = document.getElementById('dboard-interact-pts');
+  const dbQuiz = document.getElementById('dboard-quiz-pts');
+  if (dbSheet) dbSheet.textContent = sheetPts.toLocaleString('ar-DZ');
+  if (dbInteract) dbInteract.textContent = interactPts.toLocaleString('ar-DZ');
+  if (dbQuiz) dbQuiz.textContent = quizPts.toLocaleString('ar-DZ');
+}
+
+// ربط تحديث البطولة بكل تغيير في النقاط
+(function patchTournamentPoints() {
+  const _origUpdateAll = window.updateAllPointsDisplays;
+  window.updateAllPointsDisplays = function() {
+    if (_origUpdateAll) _origUpdateAll.apply(this, arguments);
+    setTimeout(updateTournamentPoints, 100);
+  };
+
+  // تحديث عند فتح صفحة البطولة
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('[data-page="tournament"]') || e.target.closest('[onclick*="tournament"]')) {
+      setTimeout(updateTournamentPoints, 300);
+    }
+  }, false);
+
+  // تحديث دوري
+  setInterval(updateTournamentPoints, 10000);
+})();
+
+// تحديث دالة getTotalPoints لتشمل كل المصادر
+(function patchGetTotalPoints() {
+  const _orig = window.getTotalPoints;
+  window.getTotalPoints = function() {
+    return getTournamentTotalPoints();
+  };
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// § 7 — حفظ النقاط في Google Sheets الخاص بالتفاعل
+// ══════════════════════════════════════════════════════════════
+
+const INTERACT_SHEET_WEBAPP = 'https://script.google.com/macros/s/AKfycbxXXXXXXXXXXXXXXXXXXXXXXXX/exec'; // يُستبدل برابط Apps Script الحقيقي
+
+// تسجيل نقاط التفاعل في شيت النقاط
+async function logPointsToSheet(action, points, detail) {
+  const email = localStorage.getItem('cdz_user_email') || '';
+  const name  = localStorage.getItem('cdz_user_display') || '';
+  if (!email) return;
+
+  const sheetPts    = typeof window.userSheetPts    !== 'undefined' ? (window.userSheetPts    || 0) : 0;
+  const interactPts = typeof window.userInteractPts !== 'undefined' ? (window.userInteractPts || 0) : 0;
+  const quizPts     = typeof window.userQuizPts     !== 'undefined' ? (window.userQuizPts     || 0) : 0;
+  const total       = sheetPts + interactPts + quizPts;
+
+  const payload = {
+    email,
+    name,
+    action,
+    points,
+    detail: detail || '',
+    sheet_pts:    sheetPts,
+    interact_pts: interactPts,
+    quiz_pts:     quizPts,
+    total_pts:    total,
+    tournament_pts: total,
+    timestamp: new Date().toISOString(),
+    date: new Date().toLocaleDateString('ar-DZ')
+  };
+
+  // حفظ في Supabase (جدول interaction_points)
+  try {
+    await fetch(`${SUPABASE_URL_V2}/rest/v1/interaction_points`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY_V2,
+        'Authorization': `Bearer ${SUPABASE_KEY_V2}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({
+        user_email: email,
+        user_name: name,
+        action,
+        points_earned: points,
+        interact_pts: interactPts,
+        quiz_pts: quizPts,
+        sheet_pts: sheetPts,
+        total_pts: total,
+        detail: detail || '',
+        created_at: new Date().toISOString()
+      })
+    });
+  } catch(e) { /* صامت */ }
+
+  // حفظ في localStorage كـ cache
+  try {
+    const log = JSON.parse(localStorage.getItem('cdz_pts_log') || '[]');
+    log.unshift({ ...payload, id: Date.now() });
+    if (log.length > 100) log.splice(100);
+    localStorage.setItem('cdz_pts_log', JSON.stringify(log));
+    // تحديث الإجمالي
+    localStorage.setItem('cdz_interact_pts', interactPts);
+    localStorage.setItem('cdz_total_pts', total);
+  } catch(e) {}
+}
+
+// استعادة نقاط التفاعل من localStorage عند الدخول
+(function restoreInteractPts() {
+  const saved = parseInt(localStorage.getItem('cdz_interact_pts') || '0');
+  if (saved > 0 && typeof window.userInteractPts !== 'undefined') {
+    window.userInteractPts = Math.max(window.userInteractPts || 0, saved);
+  }
+  // استعادة نقاط الكويز
+  try {
+    const prog = JSON.parse(localStorage.getItem('quizLevelProgress') || '{}');
+    let qTotal = 0;
+    Object.values(prog).forEach(lv => { qTotal += (lv.earnedPts || 0); });
+    if (qTotal > 0 && typeof window.userQuizPts !== 'undefined') {
+      window.userQuizPts = Math.max(window.userQuizPts || 0, qTotal);
+    }
+  } catch(e) {}
+})();
+
+// اعتراض addPts لتسجيلها في الشيت
+(function patchAddPtsLogging() {
+  const _origAddPts = window.addPts;
+  if (typeof _origAddPts === 'function') {
+    window.addPts = function(earned, action, detail) {
+      _origAddPts.apply(this, [earned]);
+      if (earned > 0) {
+        logPointsToSheet(action || 'interact', earned, detail || '');
+      }
+    };
+  } else {
+    // انتظر تعريف addPts
+    setTimeout(() => {
+      const fn = window.addPts;
+      if (typeof fn === 'function') {
+        window.addPts = function(earned, action, detail) {
+          fn.apply(this, [earned]);
+          if (earned > 0) logPointsToSheet(action || 'interact', earned, detail || '');
+        };
+      }
+    }, 2000);
+  }
+})();
+
+// اعتراض نقاط الكويز
+(function patchQuizPtsLogging() {
+  const _origSync = window.syncQuizPtsFromStorage;
+  if (typeof _origSync === 'function') {
+    window.syncQuizPtsFromStorage = function() {
+      const before = window.userQuizPts || 0;
+      _origSync.apply(this, arguments);
+      const after = window.userQuizPts || 0;
+      if (after > before) {
+        logPointsToSheet('quiz', after - before, 'إجابة كويز');
+      }
+    };
+  }
+})();
+
+
+// ══════════════════════════════════════════════════════════════
+// § الجلب الأولي للنقاط من شيت التفاعل
+// ══════════════════════════════════════════════════════════════
+
+async function fetchInteractPointsFromSheet() {
+  const email = localStorage.getItem('cdz_user_email') || '';
+  if (!email) return;
+  try {
+    const res = await fetch(INTERACT_SHEET + '&t=' + Date.now());
+    if (!res.ok) return;
+    const csv = await res.text();
+    const rows = csv.trim().split('\n');
+    if (rows.length < 2) return;
+    const headers = rows[0].split(',').map(h => h.replace(/"/g,'').trim().toLowerCase());
+    const emailIdx   = headers.findIndex(h => h.includes('email'));
+    const interIdx   = headers.findIndex(h => h.includes('interact') || h.includes('تفاعل'));
+    const quizIdx    = headers.findIndex(h => h.includes('quiz')     || h.includes('كويز'));
+    const sheetIdx   = headers.findIndex(h => h.includes('sheet')    || h.includes('جدول'));
+    const totalIdx   = headers.findIndex(h => h.includes('total')    || h.includes('إجمالي') || h.includes('اجمالي'));
+
+    for (let i = 1; i < rows.length; i++) {
+      const cols = rows[i].split(',');
+      const rowEmail = (cols[emailIdx] || '').replace(/"/g,'').trim().toLowerCase();
+      if (rowEmail === email.toLowerCase()) {
+        if (interIdx >= 0) {
+          const ip = parseInt((cols[interIdx]||'0').replace(/[^\d]/g,'')) || 0;
+          if (ip > 0) window.userInteractPts = Math.max(window.userInteractPts || 0, ip);
+        }
+        if (quizIdx >= 0) {
+          const qp = parseInt((cols[quizIdx]||'0').replace(/[^\d]/g,'')) || 0;
+          if (qp > 0) window.userQuizPts = Math.max(window.userQuizPts || 0, qp);
+        }
+        if (sheetIdx >= 0) {
+          const sp = parseInt((cols[sheetIdx]||'0').replace(/[^\d]/g,'')) || 0;
+          if (sp > 0 && typeof window.userSheetPts !== 'undefined') {
+            window.userSheetPts = Math.max(window.userSheetPts || 0, sp);
+          }
+        }
+        if (typeof window.updateAllPointsDisplays === 'function') {
+          window.updateAllPointsDisplays();
+        }
+        break;
+      }
+    }
+  } catch(e) { console.warn('fetchInteractPointsFromSheet:', e); }
+}
+
+// تشغيل عند الدخول
+if (localStorage.getItem('cdz_logged_in') === '1') {
+  setTimeout(fetchInteractPointsFromSheet, 1500);
+}
+
+// تشغيل عند تسجيل الدخول
+const _origApplyFinal = window.applyUserDataToApp;
+window.applyUserDataToApp = function() {
+  if (_origApplyFinal) _origApplyFinal.apply(this, arguments);
+  setTimeout(fetchInteractPointsFromSheet, 800);
+  setTimeout(updateTournamentPoints, 1200);
+  setTimeout(() => {
+    const src = localStorage.getItem('cdz_user_photo') || '';
+    if (src) syncAvatarToAllScreens(src);
+    filterSelfFromSuggestions();
+  }, 500);
+};
+
+
+// ══════════════════════════════════════════════════════════════
+// § تحسين عرض النقاط الإجمالية في البطولة
+// ══════════════════════════════════════════════════════════════
+
+// إضافة بطاقة النقاط الإجمالية في صفحة البطولة
+function addTournamentPtsSummary() {
+  const tournPage = document.querySelector('.tournament-page');
+  if (!tournPage || document.getElementById('tourn-pts-summary')) return;
+
+  const summary = document.createElement('div');
+  summary.id = 'tourn-pts-summary';
+  summary.style.cssText = `
+    background: linear-gradient(135deg, #1a6dff, #6366f1);
+    border-radius: 16px; padding: 14px 16px; margin: 10px 14px;
+    color: #fff; font-family: var(--font-main);
+  `;
+
+  function updateSummary() {
+    const sheetPts    = typeof window.userSheetPts    !== 'undefined' ? (window.userSheetPts    || 0) : 0;
+    const interactPts = typeof window.userInteractPts !== 'undefined' ? (window.userInteractPts || 0) : 0;
+    const quizPts     = typeof window.userQuizPts     !== 'undefined' ? (window.userQuizPts     || 0) : 0;
+    const total       = sheetPts + interactPts + quizPts;
+
+    summary.innerHTML = `
+      <div style="font-size:.78rem;opacity:.8;margin-bottom:6px">نقاطك في البطولة</div>
+      <div style="font-size:1.6rem;font-weight:900;margin-bottom:10px">${total.toLocaleString('ar-DZ')} <span style="font-size:.75rem;opacity:.8">نقطة</span></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        <div style="background:rgba(255,255,255,.15);border-radius:10px;padding:8px;text-align:center">
+          <div style="font-size:.65rem;opacity:.75;margin-bottom:2px">نقاط الجدول</div>
+          <div style="font-weight:800;font-size:.88rem">${sheetPts.toLocaleString('ar-DZ')}</div>
+        </div>
+        <div style="background:rgba(255,255,255,.15);border-radius:10px;padding:8px;text-align:center">
+          <div style="font-size:.65rem;opacity:.75;margin-bottom:2px">نقاط التفاعل</div>
+          <div style="font-weight:800;font-size:.88rem">${interactPts.toLocaleString('ar-DZ')}</div>
+        </div>
+        <div style="background:rgba(255,255,255,.15);border-radius:10px;padding:8px;text-align:center">
+          <div style="font-size:.65rem;opacity:.75;margin-bottom:2px">نقاط الكويز</div>
+          <div style="font-weight:800;font-size:.88rem">${quizPts.toLocaleString('ar-DZ')}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  updateSummary();
+  summary._update = updateSummary;
+
+  // إدراج بعد شريط الموسم
+  const seasonBar = tournPage.querySelector('.tourn-season-bar');
+  if (seasonBar) seasonBar.after(summary);
+  else tournPage.insertBefore(summary, tournPage.querySelector('.tourn-div-tabs') || tournPage.firstChild);
+
+  // تحديث دوري
+  setInterval(updateSummary, 5000);
+}
+
+// إضافة عند فتح صفحة البطولة
+document.addEventListener('click', function(e) {
+  if (e.target.closest('[data-page="tournament"]') || e.target.closest('[onclick*="tournament"]')) {
+    setTimeout(addTournamentPtsSummary, 400);
+    setTimeout(updateTournamentPoints, 500);
+  }
+}, false);
+
+// تشغيل مبدئي
+setTimeout(() => {
+  addTournamentPtsSummary();
+  updateTournamentPoints();
+  const src = localStorage.getItem('cdz_user_photo') || '';
+  if (src) syncAvatarToAllScreens(src);
+  filterSelfFromSuggestions();
+}, 2500);
+
+
+console.log('✅ SUPER PATCH v2 — جميع الإصلاحات السبعة تم تطبيقها');
+
+})(); // end SUPER_PATCH_V2
 </script>
 </html>
